@@ -1,6 +1,6 @@
 // Small Gemini helper shared by edge functions.
 // Set GEMINI_MODEL as a function secret to change the model without a redeploy of code.
-const DEFAULT_MODEL = 'gemini-3.6-flash'
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
 
 export async function callGeminiJson<T>(prompt: string): Promise<T> {
   const model = Deno.env.get('GEMINI_MODEL') ?? DEFAULT_MODEL

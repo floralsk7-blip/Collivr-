@@ -18,6 +18,7 @@ export type ProjectLike = {
   skills_required?: string[] | null
   experience_required?: string | null
   team_size?: number | null
+  description?: string | null
 }
 
 const RANK: Record<string, number> = { beginner: 1, intermediate: 2, advanced: 3 }
@@ -50,7 +51,8 @@ export function scoreStudentForProject(student: Student, project: ProjectLike): 
 
   const overlap: string[] = []
   const missing: string[] = []
-  let skillPart = 0.5
+  const hasSkillEvidence = p.skills.size > 0
+  let skillPart = 0
   if (required.length > 0) {
     let sum = 0
     for (const label of required) {
@@ -72,13 +74,17 @@ export function scoreStudentForProject(student: Student, project: ProjectLike): 
   const interestPart = p.interests.size === 0 ? 0.5 : domainKey && p.interests.has(domainKey) ? 1 : 0
   const availPart = p.hours === null ? 0.5 : p.hours >= 8 ? 1 : p.hours >= 4 ? 0.6 : 0.3
 
-  const total = 0.55 * skillPart + 0.2 * expPart + 0.15 * interestPart + 0.1 * availPart
-  const notes =
-    (required.length > 0
-      ? `Covers ${overlap.length} of ${required.length} required skills${overlap.length ? ` (${overlap.join(', ')})` : ''}.`
-      : 'No required skills were listed.') +
-    (missing.length ? ` Missing: ${missing.join(', ')}.` : '') +
-    ` ${RANK_NAME[p.rank]} experience.`
+  // Do not award a neutral skill score when requirements or profile evidence are absent.
+  const total = required.length === 0 || !hasSkillEvidence
+    ? 0
+    : 0.55 * skillPart + 0.2 * expPart + 0.15 * interestPart + 0.1 * availPart
+  const notes = required.length === 0
+    ? 'Project requirements are missing; a reliable skill match cannot be calculated.'
+    : !hasSkillEvidence
+      ? 'Student profile has no listed skills; match cannot be verified.'
+      : `Covers ${overlap.length} of ${required.length} required skills${overlap.length ? ` (${overlap.join(', ')})` : ''}.` +
+        (missing.length ? ` Missing: ${missing.join(', ')}.` : '') +
+        ` ${RANK_NAME[p.rank]} experience.`
 
   return { student_id: student.id, score_percent: Math.round(total * 100), skill_overlap: overlap, notes }
 }
@@ -146,9 +152,14 @@ export function describeTeam(
 
 export function pickBestTeam(students: Student[], project: ProjectLike, size: number): TeamPick {
   const spec = specOf(project)
+  if (spec.skillsFocus.length === 0) {
+    throw new Error('Add project requirements or required skills before suggesting a team.')
+  }
   const prepared = students.map((s) => prepareStudent(s, spec))
-  const k = Math.max(1, Math.min(Math.floor(size) || 1, prepared.length))
-  const pool = [...prepared].sort((a, b) => b.strength - a.strength).slice(0, 40)
+  const eligible = prepared.filter((p) => p.skills.size > 0)
+  if (eligible.length === 0) throw new Error('No candidates have listed skills. Ask students to complete their profiles before team formation.')
+  const k = Math.max(1, Math.min(Math.floor(size) || 1, eligible.length))
+  const pool = [...eligible].sort((a, b) => b.strength - a.strength).slice(0, 40)
 
   let team = pool.slice(0, k)
   const rest = pool.slice(k)
@@ -292,7 +303,11 @@ const ROLE_RULES: [RegExp, string][] = [
 
 export function fallbackAnalysis(project: ProjectLike, studentSkillLists: string[][]) {
   const required = (project.skills_required ?? []).filter(Boolean)
-  const roles = new Set<string>(['Project Lead'])
+  const roles = new Set<string>()
+  const hasContext = Boolean((project.description ?? '').trim() || (project.domain ?? '').trim() || required.length)
+  if (!hasContext) {
+    return { identified_roles: [], skill_gaps: [], sustainability_notes: 'Add a project description, domain, or required skills before generating project analysis. No roles or skill gaps were inferred.' }
+  }
   for (const skill of required) {
     const rule = ROLE_RULES.find(([re]) => re.test(skill))
     roles.add(rule ? rule[1] : `${skill} Specialist`)
