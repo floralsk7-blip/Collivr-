@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --bg-page: #F7F3EA;
+  --bg-card: #FFFFFF;
+  --bg-subtle: #F1ECDF;
+  --border: #E4DCC8;
+  --border-strong: #CFC4A8;
+  --green-900: #1E3A2C;
+  --green-700: #2E6B4F;
+  --gold: #D9A441;
+  --text-dark: #1B2E24;
+  --text-body: #4A5B50;
+  --text-muted: #7A867D;
+}
+
+@layer base {
+  html, body {
+    background-color: #F7F3EA;
+    color: #1B2E24;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 {
+    font-family: 'Source Serif 4', Georgia, serif;
+    letter-spacing: -0.01em;
+  }
+  * { box-sizing: border-box; }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid #D9A441;
+    outline-offset: 2px;
+  }
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: #D9CFB6; border-radius: 4px; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fadeIn 0.45s ease-out; }
+
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.skeleton {
+  background-color: #EAE3D1;
+  border-radius: 8px;
+  animation: skeletonPulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in, .skeleton { animation: none; }
+}
