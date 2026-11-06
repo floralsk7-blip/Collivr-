@@ -151,6 +151,7 @@ ${JSON.stringify({
   manually_entered_skills: project.skills_required ?? [],
   experience_required: project.experience_required,
   team_size: project.team_size,
+  deadline: project.deadline ?? null,
 })}
 
 ANALYSIS TASKS:
