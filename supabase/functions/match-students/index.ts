@@ -58,9 +58,21 @@ serve(async (req) => {
       })
     }
 
+    const { data: projectAnalysis, error: analysisError } = await admin
+      .from('ai_analysis')
+      .select('identified_roles, skill_gaps')
+      .eq('project_id', projectId)
+      .maybeSingle()
+
+    if (analysisError) throw new Error(analysisError.message)
+    const identifiedRoles = projectAnalysis?.identified_roles ?? []
+
     // Include all candidate profile information in the cache key.
     // This prevents stale results when student profiles change.
     const hash = await hashJson({
+      // Bump whenever scoring/eligibility rules change so old AI scores
+      // cannot survive a prompt or policy update for otherwise unchanged data.
+      matching_algorithm_version: 'core-skill-or-interest-gate-v2-60-15-10-5-5-5',
       project: {
         id: project.id,
         name: project.name,
@@ -68,6 +80,9 @@ serve(async (req) => {
         domain: project.domain,
         skills_required: project.skills_required ?? [],
         experience_required: project.experience_required,
+        team_size: project.team_size,
+        deadline: project.deadline ?? null,
+        identified_roles: identifiedRoles,
       },
       candidates: list.map((student) => ({
         id: student.id,
@@ -78,6 +93,7 @@ serve(async (req) => {
         availability: student.availability_hours,
         branch: student.branch,
         department: student.department,
+        previous_projects: student.previous_projects ?? [],
       })),
     })
 
@@ -108,7 +124,7 @@ serve(async (req) => {
           // Gemini evaluates the complete candidate list.
           const raw = await callGeminiJson<unknown>(
             buildMatchPrompt(
-              project,
+              { ...project, identified_roles: identifiedRoles },
               list.map((student) => ({ student })),
             ),
           )
@@ -141,10 +157,6 @@ serve(async (req) => {
         throw new Error(
           outcome.notice ?? 'AI matching could not be completed.',
         )
-      }
-
-      if (final.length === 0) {
-        throw new Error('AI did not return any valid student matches.')
       }
 
       await putCached(
