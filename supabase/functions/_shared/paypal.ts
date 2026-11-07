@@ -106,6 +106,32 @@ export function getOrder(orderId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Webhook Signature Verification
+// ---------------------------------------------------------------------------
+export function verifyWebhookSignature(params: {
+  authAlgo: string
+  certUrl: string
+  transmissionId: string
+  transmissionSig: string
+  transmissionTime: string
+  webhookId: string
+  webhookEvent: Record<string, unknown>
+}) {
+  return paypalFetch('/v1/notifications/verify-webhook-signature', {
+    method: 'POST',
+    body: {
+      auth_algo: params.authAlgo,
+      cert_url: params.certUrl,
+      transmission_id: params.transmissionId,
+      transmission_sig: params.transmissionSig,
+      transmission_time: params.transmissionTime,
+      webhook_id: params.webhookId,
+      webhook_event: params.webhookEvent,
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Subscriptions (student Premium and College plans)
 // ---------------------------------------------------------------------------
 export function getSubscription(subscriptionId: string) {

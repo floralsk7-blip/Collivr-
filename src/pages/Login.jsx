@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { supabase } from '../lib/supabaseClient'
+import { supabase, isDevMode } from '../lib/supabaseClient'
 import Logo from '../components/Logo'
 
 const FIELD = 'w-full rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-text placeholder:text-muted focus:border-primary focus:outline-none'
@@ -141,6 +141,41 @@ export default function Login() {
           <div className="my-5 flex items-center gap-3 text-xs text-muted">
             <span className="h-px flex-1 bg-border" /> or use email <span className="h-px flex-1 bg-border" />
           </div>
+
+          {isDevMode && (
+            <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-900 dark:text-amber-300">
+              <p className="font-semibold">[Local Dev Mode] Mock Authentication</p>
+              <p className="mt-1 leading-relaxed text-amber-800/90 dark:text-amber-300/90">
+                Operating with local mock data (no live Supabase credentials). Click below to autofill mock credentials:
+              </p>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmail('student.dev@collivra.local')
+                    setPassword('password123')
+                    setAccountType('student')
+                    setIsSignUp(false)
+                  }}
+                  className="rounded-md border border-border bg-surface px-2.5 py-1 text-[11.5px] font-semibold text-primary shadow-xs hover:bg-surface2"
+                >
+                  Student Account
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmail('organiser.dev@collivra.local')
+                    setPassword('password123')
+                    setAccountType('organiser')
+                    setIsSignUp(false)
+                  }}
+                  className="rounded-md border border-border bg-surface px-2.5 py-1 text-[11.5px] font-semibold text-primary shadow-xs hover:bg-surface2"
+                >
+                  Organiser Account
+                </button>
+              </div>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             {isSignUp && (

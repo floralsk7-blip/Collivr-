@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabaseClient'
 import { useAuth } from './hooks/useAuth'
@@ -7,7 +7,6 @@ import Login from './pages/Login'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import Profile from './pages/Profile'
-import CreateProject from './pages/CreateProject'
 import DiscoverProjects from './pages/DiscoverProjects'
 import ProjectDetail from './pages/ProjectDetail'
 import TeamFormation from './pages/TeamFormation'
@@ -29,6 +28,23 @@ import Analytics from './pages/Analytics'
 import Mentors from './pages/Mentors'
 import PaymentSuccess from './pages/PaymentSuccess'
 import EventCertificate from './pages/EventCertificate'
+
+// Code-split secondary dashboard and mentorship views to optimize initial bundle size
+const CreateProject = lazy(() => import('./pages/CreateProject'))
+const MentorProfile = lazy(() => import('./pages/MentorProfile'))
+const MentorDashboard = lazy(() => import('./pages/MentorDashboard'))
+const StudentMentorships = lazy(() => import('./pages/StudentMentorships'))
+
+function RouteLoadingFallback() {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center bg-bg">
+      <div className="flex flex-col items-center gap-3">
+        <div className="skeleton h-10 w-10 rounded-full" />
+        <div className="skeleton h-4 w-32" />
+      </div>
+    </div>
+  )
+}
 
 function StudentOnly({ children }) {
   const { profile, loading } = useProfile()
@@ -79,9 +95,12 @@ export default function App() {
       <Route path="/find-people" element={<Protected><StudentOnly><FindPeople /></StudentOnly></Protected>} />
       <Route path="/network" element={<Protected><StudentOnly><MyNetwork /></StudentOnly></Protected>} />
       <Route path="/discover" element={<Protected><StudentOnly><DiscoverProjects /></StudentOnly></Protected>} />
-      <Route path="/create-project" element={<Protected><StudentOnly><CreateProject /></StudentOnly></Protected>} />
+      <Route path="/create-project" element={<Protected><StudentOnly><Suspense fallback={<RouteLoadingFallback />}><CreateProject /></Suspense></StudentOnly></Protected>} />
       <Route path="/analytics" element={<Protected><StudentOnly><Analytics /></StudentOnly></Protected>} />
       <Route path="/mentors" element={<Protected><StudentOnly><Mentors /></StudentOnly></Protected>} />
+      <Route path="/mentor/profile" element={<Protected><Suspense fallback={<RouteLoadingFallback />}><MentorProfile /></Suspense></Protected>} />
+      <Route path="/mentor/dashboard" element={<Protected><Suspense fallback={<RouteLoadingFallback />}><MentorDashboard /></Suspense></Protected>} />
+      <Route path="/student/mentorships" element={<Protected><StudentOnly><Suspense fallback={<RouteLoadingFallback />}><StudentMentorships /></Suspense></StudentOnly></Protected>} />
       <Route path="/pricing" element={<Protected><Pricing /></Protected>} />
       <Route path="/events" element={<Protected><Events /></Protected>} />
       <Route path="/events/:id" element={<Protected><EventDetail /></Protected>} />

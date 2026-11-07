@@ -26,6 +26,9 @@ type Analysis = {
   project_complexity: string
   reasoning: string
   sustainability_notes: string
+  recommended_mentor_type?: string
+  mentor_focus_areas?: string[]
+  mentor_guidance_notes?: string
 }
 
 function cleanList(value: unknown, max = 15): string[] {
@@ -81,6 +84,9 @@ function parseAnalysis(raw: unknown): Analysis {
     project_complexity: cleanText(result.project_complexity, 50),
     reasoning: cleanText(result.reasoning, 1200),
     sustainability_notes: cleanText(result.sustainability_notes, 1200),
+    recommended_mentor_type: cleanText(result.recommended_mentor_type, 60) || 'Industry Expert',
+    mentor_focus_areas: cleanList(result.mentor_focus_areas, 6),
+    mentor_guidance_notes: cleanText(result.mentor_guidance_notes, 600),
   }
 
   if (
