@@ -267,19 +267,34 @@ export default function Mentors() {
         )}
 
         <section className="mt-9 rounded-2xl border border-border bg-surface p-6 shadow-card">
-          <h2 className="text-xl font-bold text-text">Become a mentor</h2>
-          <p className="mt-1 text-sm text-textSecondary">Free for everyone. Premium students can send you requests, and you choose who to accept.</p>
-          <label className="mt-4 flex items-center gap-2 text-sm text-text">
-            <input type="checkbox" checked={mine.is_mentor} onChange={(e) => setMine((m) => ({ ...m, is_mentor: e.target.checked }))} className="h-4 w-4 accent-[#2E6B4F]" />
-            List me as a mentor
-          </label>
-          {mine.is_mentor && (
-            <div className="mt-4 space-y-3">
-              <input className={FIELD} placeholder="Topics you can help with, separated by commas (e.g. AI/ML, React, Hackathons)" value={mine.topics} onChange={(e) => setMine((m) => ({ ...m, topics: e.target.value }))} />
-              <textarea className={FIELD} rows={3} maxLength={400} placeholder="A short bio: your experience and how you like to help" value={mine.bio} onChange={(e) => setMine((m) => ({ ...m, bio: e.target.value }))} />
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+            <div>
+              <h2 className="text-xl font-bold text-text">Become a Verified Mentor</h2>
+              <p className="mt-1 text-sm text-textSecondary">
+                Guide student project teams as a College Professor or Industry Expert. Setup your professional background, availability, and institutional verification credentials.
+              </p>
             </div>
-          )}
-          <button onClick={saveMentorProfile} className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primaryHover">Save</button>
+            <Link
+              to="/mentor/profile"
+              className="shrink-0 rounded-lg bg-primary px-5 py-2.5 text-center text-sm font-semibold text-white hover:bg-primaryHover"
+            >
+              Manage Mentor Profile →
+            </Link>
+          </div>
+
+          <div className="mt-6 border-t border-border pt-4">
+            <label className="flex items-center gap-2 text-sm text-text">
+              <input type="checkbox" checked={mine.is_mentor} onChange={(e) => setMine((m) => ({ ...m, is_mentor: e.target.checked }))} className="h-4 w-4 accent-[#2E6B4F]" />
+              Quickly list me as an active peer mentor
+            </label>
+            {mine.is_mentor && (
+              <div className="mt-4 space-y-3">
+                <input className={FIELD} placeholder="Topics you can help with, separated by commas (e.g. AI/ML, React, Hackathons)" value={mine.topics} onChange={(e) => setMine((m) => ({ ...m, topics: e.target.value }))} />
+                <textarea className={FIELD} rows={3} maxLength={400} placeholder="A short bio: your experience and how you like to help" value={mine.bio} onChange={(e) => setMine((m) => ({ ...m, bio: e.target.value }))} />
+                <button onClick={saveMentorProfile} className="mt-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primaryHover">Save Quick Settings</button>
+              </div>
+            )}
+          </div>
         </section>
       </div>
     </AppShell>

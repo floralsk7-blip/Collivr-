@@ -24,6 +24,7 @@ const NAV_GROUPS = [
       { path: '/discover', label: 'Find Projects', icon: 'search' },
       { path: '/network', label: 'Community', icon: 'link', badgeKey: 'network' },
       { path: '/mentors', label: 'Mentors', icon: 'sparkle' },
+      { path: '/student/mentorships', label: 'My Mentorships', icon: 'sparkle' },
     ],
   },
   {

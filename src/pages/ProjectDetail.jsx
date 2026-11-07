@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../hooks/useAuth'
 import { analyzeProject, matchStudents } from '../lib/gemini'
+import { discoverMentorsForProject } from '../lib/mentorMatchingService'
 import AppShell from '../components/AppShell'
 import AIInsightPanel from '../components/AIInsightPanel'
 import StudentCard from '../components/StudentCard'
 import UpgradeNotice from '../components/UpgradeNotice'
+import MentorBookingModal from '../components/MentorBookingModal'
+import {
+  getWorkspaceNotes,
+  addWorkspaceNote,
+  getProjectMilestones,
+  toggleMilestoneStatus,
+} from '../lib/mentorWorkspaceService'
 
 export default function ProjectDetail() {
   const { id } = useParams()
@@ -24,6 +32,18 @@ export default function ProjectDetail() {
   const [matchNotice, setMatchNotice] = useState('')
   const [matchSource, setMatchSource] = useState('')
   const [analysisNotice, setAnalysisNotice] = useState('')
+
+  const [matchedMentors, setMatchedMentors] = useState([])
+  const [loadingMentors, setLoadingMentors] = useState(false)
+  const [mentorFilter, setMentorFilter] = useState('all')
+  const [bookingMentor, setBookingMentor] = useState(null)
+
+  // Mentorship Workspace states
+  const [workspaceNotes, setWorkspaceNotes] = useState([])
+  const [projectMilestones, setProjectMilestones] = useState([])
+  const [newNoteContent, setNewNoteContent] = useState('')
+  const [newNoteCategory, setNewNoteCategory] = useState('general')
+  const [submittingNote, setSubmittingNote] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -46,7 +66,24 @@ export default function ProjectDetail() {
         }
 
         if (cancelled) return
-        setProject(proj)
+
+        let effectiveProj = proj
+        if (proj && !proj.mentor_preference) {
+          try {
+            const rawDraft =
+              sessionStorage.getItem('collivra_create_project_draft_v2') ||
+              sessionStorage.getItem('collivra_create_project_draft')
+            if (rawDraft) {
+              const draft = JSON.parse(rawDraft)
+              if (draft?.project?.id === id && draft?.form?.mentor_preference) {
+                effectiveProj = { ...proj, mentor_preference: draft.form.mentor_preference }
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+        setProject(effectiveProj)
 
         const { data: existingAnalysis } = await supabase
           .from('ai_analysis')
@@ -78,6 +115,24 @@ export default function ProjectDetail() {
         if (creator && !(existingMatches || []).length) {
           runMatching(proj)
         }
+
+        if (proj.mentor_preference && proj.mentor_preference !== 'none') {
+          loadMatchedMentors(proj)
+        }
+
+        // Load Mentorship Workspace Notes and Milestones
+        try {
+          const [notes, milestones] = await Promise.all([
+            getWorkspaceNotes(id),
+            getProjectMilestones(id),
+          ])
+          if (!cancelled) {
+            setWorkspaceNotes(notes || [])
+            setProjectMilestones(milestones || [])
+          }
+        } catch (wErr) {
+          console.warn('Could not load workspace notes/milestones:', wErr)
+        }
       } catch (err) {
         console.error('Project load error:', err)
 
@@ -85,6 +140,22 @@ export default function ProjectDetail() {
           setMatchError(err?.message || 'Could not load project details.')
           setLoading(false)
         }
+      }
+    }
+
+    async function loadMatchedMentors(proj) {
+      setLoadingMentors(true)
+      try {
+        const results = await discoverMentorsForProject(proj, {
+          currentUserId: user?.id,
+        })
+        if (!cancelled) {
+          setMatchedMentors(results.all_matches || [])
+        }
+      } catch (err) {
+        console.warn('Could not load matched mentors:', err)
+      } finally {
+        if (!cancelled) setLoadingMentors(false)
       }
     }
 
@@ -158,6 +229,41 @@ export default function ProjectDetail() {
       )
     } finally {
       setMatching(false)
+    }
+  }
+
+  async function handleAddNote(e) {
+    e?.preventDefault()
+    if (!newNoteContent.trim() || !user || !project) return
+    setSubmittingNote(true)
+    try {
+      const activeMentorId = matchedMentors[0]?.mentor_id || 'dev-mentor-faculty-001'
+      const note = await addWorkspaceNote({
+        projectId: project.id,
+        mentorId: activeMentorId,
+        studentId: user.id,
+        authorId: user.id,
+        category: newNoteCategory,
+        content: newNoteContent,
+      })
+      setWorkspaceNotes((prev) => [note, ...prev])
+      setNewNoteContent('')
+    } catch (err) {
+      console.warn('Could not add note:', err)
+    } finally {
+      setSubmittingNote(false)
+    }
+  }
+
+  async function handleToggleMilestone(milestoneId, currentStatus) {
+    const nextStatus = currentStatus === 'completed' ? 'in_progress' : 'completed'
+    try {
+      await toggleMilestoneStatus(milestoneId, nextStatus)
+      setProjectMilestones((prev) =>
+        prev.map((m) => (m.id === milestoneId ? { ...m, status: nextStatus } : m))
+      )
+    } catch (err) {
+      console.warn('Could not toggle milestone:', err)
     }
   }
 
@@ -269,6 +375,17 @@ export default function ProjectDetail() {
           <span>
             Experience: {project.experience_required || 'Not specified'}
           </span>
+
+          {project.mentor_preference && project.mentor_preference !== 'none' && (
+            <span>
+              Mentor:{' '}
+              {project.mentor_preference === 'professor'
+                ? 'College Professor'
+                : project.mentor_preference === 'industry'
+                  ? 'Industry Expert'
+                  : 'AI Recommendation'}
+            </span>
+          )}
         </div>
 
         {/* ai project analysis */}
@@ -405,6 +522,381 @@ export default function ProjectDetail() {
               Generate AI Team Recommendation →
             </button>
           </div>
+        )}
+
+        {/* AI Matched Mentors Section */}
+        {project.mentor_preference && project.mentor_preference !== 'none' && (
+          <div className="mt-12 border-t border-border pt-8">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xl">✨</span>
+                  <h2 className="text-xl font-bold text-text">
+                    AI-Matched Mentors
+                  </h2>
+                  <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
+                    {project.mentor_preference === 'both' || project.mentor_preference === 'ai'
+                      ? 'Academic & Industry Fit'
+                      : project.mentor_preference === 'college_professor' || project.mentor_preference === 'professor'
+                        ? 'College Professors'
+                        : 'Industry Experts'}
+                  </span>
+                </div>
+
+                <p className="mt-1 text-xs text-muted">
+                  Ranked College Professors and Industry Experts based on technical fit, project complexity, and domain relevance.
+                </p>
+              </div>
+
+              {/* Category Filter Pills */}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMentorFilter('all')}
+                  className={`rounded-[9px] px-3.5 py-1.5 text-xs font-semibold transition ${
+                    mentorFilter === 'all'
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'border border-border bg-surface text-textSecondary hover:bg-surface2'
+                  }`}
+                >
+                  All ({matchedMentors.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMentorFilter('college_professor')}
+                  className={`rounded-[9px] px-3.5 py-1.5 text-xs font-semibold transition ${
+                    mentorFilter === 'college_professor'
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'border border-border bg-surface text-textSecondary hover:bg-surface2'
+                  }`}
+                >
+                  🎓 College Professors ({matchedMentors.filter((m) => m.categories?.includes('college_professor') || m.primary_category === 'college_professor').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMentorFilter('industry_expert')}
+                  className={`rounded-[9px] px-3.5 py-1.5 text-xs font-semibold transition ${
+                    mentorFilter === 'industry_expert'
+                      ? 'bg-primary text-white shadow-sm'
+                      : 'border border-border bg-surface text-textSecondary hover:bg-surface2'
+                  }`}
+                >
+                  💼 Industry Experts ({matchedMentors.filter((m) => m.categories?.includes('industry_expert') || m.primary_category === 'industry_expert').length})
+                </button>
+              </div>
+            </div>
+
+            {loadingMentors ? (
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div className="skeleton h-44 rounded-2xl" />
+                <div className="skeleton h-44 rounded-2xl" />
+              </div>
+            ) : matchedMentors.length === 0 ? (
+              <p className="mt-6 rounded-2xl border border-dashed border-border p-8 text-center text-sm text-muted">
+                No matching mentors found yet. Mentors will appear as soon as verified professors or industry experts matching your requirements register on Collivra.
+              </p>
+            ) : (
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                {matchedMentors
+                  .filter((m) => {
+                    if (mentorFilter === 'all') return true
+                    return m.categories?.includes(mentorFilter) || m.primary_category === mentorFilter
+                  })
+                  .map((mentor) => (
+                    <div
+                      key={mentor.mentor_id}
+                      className="flex flex-col justify-between rounded-2xl border border-border bg-surface p-5 shadow-card transition hover:border-borderStrong"
+                    >
+                      <div>
+                        {/* Top: Name, Affiliation, Category, Score */}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface2 text-base font-bold text-primary">
+                              {mentor.full_name?.charAt(0)?.toUpperCase()}
+                            </span>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <h3 className="text-sm font-semibold text-text">
+                                  {mentor.full_name}
+                                </h3>
+                                {mentor.verification_status === 'verified' && (
+                                  <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold text-accent" title="Verified by institutional credentials">
+                                    ✓ Verified
+                                  </span>
+                                )}
+                              </div>
+
+                              <p className="text-xs text-muted">
+                                {mentor.primary_category === 'college_professor'
+                                  ? `${mentor.academic_designation || 'Faculty'} · ${mentor.institution_name || 'Academic Institution'}`
+                                  : `${mentor.company_role || 'Industry Specialist'} · ${mentor.company_name || 'Technology Enterprise'}`}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Fit Score Badge */}
+                          <div className="flex flex-col items-end">
+                            <span className="rounded-full bg-accent/15 px-2.5 py-1 text-xs font-bold text-accent">
+                              {mentor.final_score}% fit
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Professional Headline */}
+                        <p className="mt-2 text-xs font-medium text-text">
+                          {mentor.headline}
+                        </p>
+
+                        {/* Score Breakdown Pills */}
+                        <div className="mt-3 flex flex-wrap gap-1.5 border-y border-border py-2 text-[11px] text-textSecondary">
+                          <span className="rounded bg-surface2 px-2 py-0.5">
+                            Expertise: <strong>{mentor.score_breakdown?.expertise}%</strong>
+                          </span>
+                          <span className="rounded bg-surface2 px-2 py-0.5">
+                            Experience: <strong>{mentor.score_breakdown?.experience}%</strong>
+                          </span>
+                          <span className="rounded bg-surface2 px-2 py-0.5">
+                            Background: <strong>{mentor.score_breakdown?.background}%</strong>
+                          </span>
+                          <span className="rounded bg-surface2 px-2 py-0.5">
+                            Availability: <strong>{mentor.score_breakdown?.availability}%</strong>
+                          </span>
+                        </div>
+
+                        {/* AI Match Explanation */}
+                        {mentor.explanation && (
+                          <div className="mt-3 rounded-[9px] bg-primary/5 p-3 text-xs leading-relaxed text-textSecondary">
+                            <p className="font-semibold text-text">
+                              {mentor.explanation.match_summary}
+                            </p>
+                            <p className="mt-1">
+                              {mentor.explanation.why_matched}
+                            </p>
+                            <p className="mt-1 text-primary">
+                              {mentor.explanation.how_mentor_helps}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Matched Skills */}
+                        {mentor.matched_skills?.length > 0 && (
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {mentor.matched_skills.map((skill) => (
+                              <span
+                                key={skill}
+                                className="rounded-md bg-surface2 px-2 py-0.5 text-[11px] font-medium text-primary"
+                              >
+                                {skill}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {/* Available Mentorship Packages */}
+                        {mentor.packages?.length > 0 && (
+                          <div className="mt-3 rounded-lg border border-border bg-surface2/40 p-2.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-text">Packages & Mentorship:</span>
+                              <span className="font-bold text-accent">
+                                From ${Math.min(...mentor.packages.map((p) => p.price_usd))}/mo
+                              </span>
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {mentor.packages.map((p) => (
+                                <span
+                                  key={p.id}
+                                  className="rounded bg-surface px-2 py-0.5 text-[10px] font-medium text-textSecondary border border-border"
+                                  title={p.description || p.name}
+                                >
+                                  {p.tier?.toUpperCase()}: ${p.price_usd}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Action */}
+                      <div className="mt-4 pt-2 border-t border-border flex items-center justify-between">
+                        <span className="text-xs text-muted">
+                          {mentor.years_of_experience} yrs exp · {mentor.availability_info?.weekly_hours || 5} hrs/wk
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => setBookingMentor(mentor)}
+                          className="rounded-[8px] bg-primary px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-primaryHover shadow-sm"
+                        >
+                          Book Session →
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Project Mentorship Workspace (Sub-phase 8) */}
+        {project.mentor_preference && project.mentor_preference !== 'none' && (
+          <div className="mt-12 border-t border-border pt-8 space-y-6">
+            <div className="flex flex-col justify-between gap-2 md:flex-row md:items-center">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🎯</span>
+                  <h2 className="text-xl font-bold text-text">
+                    Mentorship Workspace
+                  </h2>
+                  <span className="rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent">
+                    Active Collaboration
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  Shared milestones, technical code review notes, and architectural guidance for this project.
+                </p>
+              </div>
+
+              <Link
+                to="/student/mentorships"
+                className="text-xs font-semibold text-primary hover:underline"
+              >
+                View Full Mentorship Hub →
+              </Link>
+            </div>
+
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              {/* Left Column: Milestones */}
+              <div className="rounded-2xl border border-border bg-surface p-5 shadow-card space-y-4">
+                <div className="flex items-center justify-between border-b border-border pb-3">
+                  <h3 className="text-sm font-bold text-text">Mentorship Milestones</h3>
+                  <span className="text-xs text-muted">
+                    {projectMilestones.filter((m) => m.status === 'completed').length}/{projectMilestones.length} Completed
+                  </span>
+                </div>
+
+                {projectMilestones.length === 0 ? (
+                  <p className="py-6 text-center text-xs text-muted">
+                    No milestones recorded yet. Sessions with your mentor will establish project milestones.
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {projectMilestones.map((milestone) => (
+                      <div
+                        key={milestone.id}
+                        onClick={() => handleToggleMilestone(milestone.id, milestone.status)}
+                        className={`cursor-pointer flex items-start gap-3 rounded-xl border p-3 transition ${
+                          milestone.status === 'completed'
+                            ? 'border-border/60 bg-surface2/30 opacity-75'
+                            : 'border-border bg-surface hover:bg-surface2/40'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={milestone.status === 'completed'}
+                          readOnly
+                          className="mt-0.5 rounded border-border text-primary focus:ring-primary"
+                        />
+                        <div className="flex-1">
+                          <h4 className={`text-xs font-semibold ${milestone.status === 'completed' ? 'line-through text-muted' : 'text-text'}`}>
+                            {milestone.title}
+                          </h4>
+                          {milestone.description && (
+                            <p className="mt-0.5 text-[11px] text-textSecondary">
+                              {milestone.description}
+                            </p>
+                          )}
+                          {milestone.due_date && (
+                            <span className="mt-1 inline-block text-[10px] text-muted">
+                              Due: {milestone.due_date}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right Column: Shared Notes & Code Review Records */}
+              <div className="rounded-2xl border border-border bg-surface p-5 shadow-card space-y-4">
+                <div className="flex items-center justify-between border-b border-border pb-3">
+                  <h3 className="text-sm font-bold text-text">Workspace Notes & Code Reviews</h3>
+                  <span className="text-xs text-muted">{workspaceNotes.length} Note(s)</span>
+                </div>
+
+                {/* Add Note Form */}
+                <form onSubmit={handleAddNote} className="space-y-2">
+                  <div className="flex gap-2">
+                    <select
+                      value={newNoteCategory}
+                      onChange={(e) => setNewNoteCategory(e.target.value)}
+                      className="rounded-[8px] border border-border bg-surface px-2.5 py-1 text-xs text-text focus:outline-none"
+                    >
+                      <option value="general">General</option>
+                      <option value="code_review">Code Review</option>
+                      <option value="architecture">Architecture</option>
+                      <option value="action_item">Action Item</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={newNoteContent}
+                      onChange={(e) => setNewNoteContent(e.target.value)}
+                      placeholder="Add guidance note or code review observation..."
+                      className="flex-1 rounded-[8px] border border-border bg-surface px-3 py-1 text-xs text-text placeholder:text-muted focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={submittingNote || !newNoteContent.trim()}
+                      className="rounded-[8px] bg-primary px-3.5 py-1 text-xs font-semibold text-white hover:bg-primaryHover disabled:opacity-50"
+                    >
+                      Post
+                    </button>
+                  </div>
+                </form>
+
+                {/* Notes List */}
+                <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                  {workspaceNotes.length === 0 ? (
+                    <p className="py-6 text-center text-xs text-muted">
+                      No workspace notes posted yet.
+                    </p>
+                  ) : (
+                    workspaceNotes.map((note) => (
+                      <div
+                        key={note.id}
+                        className="rounded-xl border border-border bg-surface2/30 p-3 text-xs space-y-1"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="rounded bg-surface px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary border border-border">
+                            {note.category?.replace('_', ' ')}
+                          </span>
+                          <span className="text-[10px] text-muted">
+                            {new Date(note.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <p className="text-textSecondary leading-relaxed pt-1">
+                          {note.content}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mentor Booking & Checkout Modal */}
+        {bookingMentor && (
+          <MentorBookingModal
+            mentor={bookingMentor}
+            project={project}
+            packages={bookingMentor.packages || []}
+            isOpen={Boolean(bookingMentor)}
+            onClose={() => setBookingMentor(null)}
+            onBookingSuccess={(b) => {
+              console.log('Session booked:', b)
+            }}
+          />
         )}
       </div>
     </AppShell>

@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient'
+import { supabase } from './supabaseClient.js'
 
 // Calls an edge function and turns every failure into an Error with a readable message.
 // err.code is set for business rules such as "upgrade_required" or "quota_reached".

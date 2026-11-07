@@ -303,11 +303,11 @@ const ROLE_RULES: [RegExp, string][] = [
 
 export function fallbackAnalysis(project: ProjectLike, studentSkillLists: string[][]) {
   const required = (project.skills_required ?? []).filter(Boolean)
-  const roles = new Set<string>()
   const hasContext = Boolean((project.description ?? '').trim() || (project.domain ?? '').trim() || required.length)
   if (!hasContext) {
     return { identified_roles: [], skill_gaps: [], sustainability_notes: 'Add a project description, domain, or required skills before generating project analysis. No roles or skill gaps were inferred.' }
   }
+  const roles = new Set<string>(['Project Lead'])
   for (const skill of required) {
     const rule = ROLE_RULES.find(([re]) => re.test(skill))
     roles.add(rule ? rule[1] : `${skill} Specialist`)

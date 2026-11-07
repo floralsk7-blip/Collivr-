@@ -8,6 +8,7 @@ import Icon from './Icon'
 
 const STUDENT_MENU = [
   { to: '/profile', label: 'My profile' },
+  { to: '/student/mentorships', label: 'My mentorships' },
   { to: '/events', label: 'Events' },
   { to: '/pricing', label: 'Plans & billing' },
   { to: '/settings', label: 'Settings' },

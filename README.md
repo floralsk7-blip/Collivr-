@@ -56,13 +56,15 @@ Subscriptions, payments and usage tables can only be written by the server. A da
 ## Commands
 
 ```
-npm run dev              start the app
+npm run dev              start the app (auto-detects Local Mock Mode if .env is missing)
 npm test                 optimizer, matching, plans, payment checks, import check
 npm run check:setup      verify your .env files without printing secrets
 npm run setup:plans      create the PayPal sandbox plans
 npm run build            production build
 ```
 On Windows PowerShell use `npm.cmd` and `npx.cmd`.
+
+For details on running without a live Supabase project, see [`docs/LOCAL_DEV_MODE.md`](docs/LOCAL_DEV_MODE.md).
 
 ## Known gaps
 

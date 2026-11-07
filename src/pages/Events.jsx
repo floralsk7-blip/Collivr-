@@ -175,7 +175,7 @@ export default function Events() {
   }, [user?.id])
 
   const accountType = profile?.account_type || user?.user_metadata?.account_type
-  const canCreate = Boolean(accountType && accountType !== 'student')
+  const canCreate = Boolean(accountType === 'organiser')
   const visibleEvents = events.filter((ev) => {
     const query = searchQuery.trim().toLowerCase()
     const matchesQuery = !query || [ev.name, ev.description, ev.domain].some((value) => String(value || '').toLowerCase().includes(query))

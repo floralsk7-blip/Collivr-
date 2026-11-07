@@ -27,6 +27,7 @@ create table projects (
   skills_required text[],
   experience_required text,
   status text default 'open',
+  mentor_preference text default 'none' check (mentor_preference in ('none', 'professor', 'industry', 'ai', 'both')),
   created_at timestamp default now()
 );
 
@@ -37,6 +38,9 @@ create table ai_analysis (
   identified_roles text[],
   skill_gaps text[],
   sustainability_notes text,
+  recommended_mentor_type text,
+  mentor_focus_areas text[] default '{}',
+  mentor_guidance_notes text,
   raw_response text,
   created_at timestamp default now()
 );
@@ -222,3 +226,265 @@ alter publication supabase_realtime add table direct_messages;
 
 create unique index if not exists connections_unique_pair
   on connections (least(sender_id, receiver_id), greatest(sender_id, receiver_id));
+
+-- ============================================================================
+-- Collivra Smart Mentor Matching: Mentor Profiles Architecture (Sub-phase 4)
+-- ============================================================================
+
+create table if not exists mentor_profiles (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references auth.users(id) on delete cascade,
+  full_name text not null,
+  photo_url text,
+  headline text,
+  bio text,
+  location text,
+  contact_email text,
+  contact_preferences jsonb not null default '{"email": true, "in_app": true}'::jsonb,
+  primary_category text not null default 'industry_expert' check (primary_category in ('college_professor', 'industry_expert', 'both')),
+  categories text[] not null default '{"industry_expert"}'::text[],
+  institution_name text,
+  department text,
+  academic_designation text,
+  company_name text,
+  company_role text,
+  years_of_experience int not null default 0 check (years_of_experience >= 0),
+  certifications text[] not null default '{}'::text[],
+  achievements text[] not null default '{}'::text[],
+  is_active boolean not null default true,
+  verification_status text not null default 'unverified' check (verification_status in ('unverified', 'pending', 'verified', 'rejected', 'suspended')),
+  rejection_reason text,
+  verified_at timestamptz,
+  verified_by uuid references auth.users(id),
+  offered_tiers text[] not null default '{"basic"}'::text[],
+  average_rating numeric(3,2),
+  review_count int not null default 0,
+  hourly_rate_usd numeric(8,2),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists mentor_expertise (
+  id uuid primary key default gen_random_uuid(),
+  mentor_id uuid not null unique references mentor_profiles(id) on delete cascade,
+  technical_skills text[] not null default '{}'::text[],
+  domain_expertise text[] not null default '{}'::text[],
+  research_interests text[] not null default '{}'::text[],
+  tech_stack text[] not null default '{}'::text[],
+  industry_specializations text[] not null default '{}'::text[],
+  mentorship_topics text[] not null default '{}'::text[],
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists mentor_qualifications (
+  id uuid primary key default gen_random_uuid(),
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  degree text not null,
+  institution text not null,
+  field_of_study text,
+  graduation_year int,
+  is_highest boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists mentor_portfolio (
+  id uuid primary key default gen_random_uuid(),
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  title text not null,
+  description text,
+  technologies text[] not null default '{}'::text[],
+  project_url text,
+  achievements text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists mentor_availability (
+  id uuid primary key default gen_random_uuid(),
+  mentor_id uuid not null unique references mentor_profiles(id) on delete cascade,
+  is_available boolean not null default true,
+  weekly_hours int not null default 5 check (weekly_hours >= 0 and weekly_hours <= 168),
+  timezone text not null default 'UTC',
+  preferred_days text[] not null default '{"Monday","Tuesday","Wednesday","Thursday","Friday"}'::text[],
+  preferred_time_slots text[] not null default '{"Evening (6 PM - 9 PM)"}'::text[],
+  max_active_mentees int not null default 3 check (max_active_mentees >= 1 and max_active_mentees <= 50),
+  current_active_mentees int not null default 0 check (current_active_mentees >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists mentor_verification_documents (
+  id uuid primary key default gen_random_uuid(),
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  document_type text not null check (document_type in ('institutional_id', 'faculty_id', 'employment_proof', 'degree_certificate', 'linkedin_verification', 'government_id', 'other')),
+  document_url text not null,
+  document_name text not null,
+  notes text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  reviewed_by uuid references auth.users(id),
+  reviewed_at timestamptz,
+  rejection_reason text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Sub-phase 6: Mentor Packages and Subscriptions
+create table if not exists mentor_packages (
+  id uuid primary key default gen_random_uuid(),
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  tier text not null check (tier in ('basic', 'standard', 'premium', 'custom')),
+  name text not null check (char_length(name) between 2 and 120),
+  description text,
+  price_usd numeric(8,2) not null check (price_usd >= 0),
+  currency text not null default 'USD',
+  billing_interval text not null default 'monthly' check (billing_interval in ('monthly', 'project', 'one_time')),
+  duration_weeks int not null default 4 check (duration_weeks between 1 and 52),
+  sessions_count int not null default 1 check (sessions_count between 1 and 50),
+  chat_support boolean not null default true,
+  code_review boolean not null default false,
+  project_review boolean not null default false,
+  priority_support boolean not null default false,
+  benefits text[] not null default '{}'::text[],
+  limitations text[] not null default '{}'::text[],
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint mentor_package_tier_unique unique (mentor_id, tier)
+);
+
+create table if not exists mentor_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references auth.users(id) on delete cascade,
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  package_id uuid not null references mentor_packages(id) on delete restrict,
+  project_id uuid references projects(id) on delete set null,
+  status text not null default 'pending_payment' check (status in ('pending_payment', 'active', 'paused', 'cancelled', 'expired')),
+  billing_interval text not null default 'monthly' check (billing_interval in ('monthly', 'project', 'one_time')),
+  price_paid numeric(8,2) not null default 0 check (price_paid >= 0),
+  current_period_start timestamptz,
+  current_period_end timestamptz,
+  cancel_at_period_end boolean not null default false,
+  cancelled_at timestamptz,
+  cancellation_reason text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists mentor_subscription_history (
+  id uuid primary key default gen_random_uuid(),
+  subscription_id uuid not null references mentor_subscriptions(id) on delete cascade,
+  action text not null check (action in ('created', 'payment_verified', 'activated', 'renewed', 'paused', 'resumed', 'cancellation_requested', 'cancelled', 'expired')),
+  from_status text,
+  to_status text,
+  notes text,
+  performed_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+-- Sub-phase 7: Mentor Bookings and Payments
+create table if not exists mentor_bookings (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references auth.users(id) on delete cascade,
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  package_id uuid not null references mentor_packages(id) on delete restrict,
+  project_id uuid references projects(id) on delete set null,
+  subscription_id uuid references mentor_subscriptions(id) on delete set null,
+  status text not null default 'pending_payment' check (
+    status in (
+      'pending_payment',
+      'payment_verified',
+      'awaiting_acceptance',
+      'confirmed',
+      'rejected',
+      'cancelled',
+      'completed',
+      'refund_pending',
+      'refunded'
+    )
+  ),
+  session_scheduled_at timestamptz not null,
+  session_duration_minutes int not null default 60 check (session_duration_minutes between 15 and 240),
+  proposed_alternative_times text[] not null default '{}'::text[],
+  meeting_link text,
+  student_notes text,
+  mentor_notes text,
+  rejection_reason text,
+  cancellation_reason text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists mentor_payment_transactions (
+  id uuid primary key default gen_random_uuid(),
+  booking_id uuid not null references mentor_bookings(id) on delete cascade,
+  student_id uuid not null references auth.users(id),
+  mentor_id uuid not null references mentor_profiles(id),
+  paypal_order_id text unique,
+  paypal_capture_id text unique,
+  amount numeric(8,2) not null check (amount >= 0),
+  currency text not null default 'USD',
+  status text not null check (status in ('created', 'captured', 'failed', 'refunded')),
+  idempotency_key text unique,
+  failure_reason text,
+  refund_reason text,
+  refunded_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Sub-phase 8: Mentor Workspace, Milestones, and Reviews
+create table if not exists mentor_workspace_notes (
+  id uuid primary key default gen_random_uuid(),
+  booking_id uuid references mentor_bookings(id) on delete cascade,
+  project_id uuid references projects(id) on delete cascade,
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  student_id uuid not null references auth.users(id) on delete cascade,
+  author_id uuid not null references auth.users(id),
+  category text not null default 'general' check (category in ('general', 'code_review', 'architecture', 'feedback', 'action_item')),
+  content text not null check (char_length(content) between 2 and 5000),
+  is_pinned boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists mentorship_milestones (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references projects(id) on delete cascade,
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  student_id uuid not null references auth.users(id) on delete cascade,
+  title text not null check (char_length(title) between 2 and 200),
+  description text,
+  due_date date,
+  status text not null default 'pending' check (status in ('pending', 'in_progress', 'completed', 'blocked')),
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists mentor_reviews (
+  id uuid primary key default gen_random_uuid(),
+  booking_id uuid not null unique references mentor_bookings(id) on delete cascade,
+  mentor_id uuid not null references mentor_profiles(id) on delete cascade,
+  student_id uuid not null references auth.users(id) on delete cascade,
+  rating numeric(2,1) not null check (rating >= 1.0 and rating <= 5.0),
+  review_title text check (review_title is null or char_length(review_title) <= 120),
+  review_text text not null check (char_length(review_text) between 5 and 2000),
+  is_public boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- PayPal Webhook Events Idempotency Audit Table
+create table if not exists paypal_webhook_events (
+  id uuid primary key default gen_random_uuid(),
+  event_id text unique not null,
+  event_type text not null,
+  resource_id text,
+  status text not null default 'processed',
+  payload jsonb not null default '{}'::jsonb,
+  processed_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+alter table paypal_webhook_events enable row level security;
+
