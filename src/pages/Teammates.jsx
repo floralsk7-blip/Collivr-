@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import AppShell from '../components/AppShell'
 import StudentCard from '../components/StudentCard'
+import { NO_MATCH_MESSAGE, visibleMatches } from '../lib/matching'
 
 export default function Teammates() {
   const { projectId } = useParams()
@@ -18,7 +19,7 @@ export default function Teammates() {
       .eq('project_id', projectId)
       .order('score_percent', { ascending: false })
       .then(({ data }) => {
-        setMatches(data || [])
+        setMatches(visibleMatches(data))
         setLoading(false)
       })
   }, [projectId])
@@ -35,7 +36,7 @@ export default function Teammates() {
     <AppShell breadcrumb={<span>Matched Teammates</span>}>
       <div className="mx-auto max-w-content px-6 py-7 md:px-9">
         <h1 className="text-2xl font-bold text-text">Matched Teammates</h1>
-        <p className="mt-1 text-muted">Students ranked by how well their skills, experience and availability fit this project.</p>
+        <p className="mt-1 text-muted">Only students with at least one skill the project requires are shown, ranked by skill fit first.</p>
 
         <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-center">
           <input
@@ -58,11 +59,11 @@ export default function Teammates() {
             {[...Array(6)].map((_, i) => <div key={i} className="skeleton h-56 rounded-xl" />)}
           </div>
         ) : filtered.length === 0 ? (
-          <p className="mt-16 text-center text-muted">No teammates match these filters.</p>
+          <p className="mt-16 text-center text-muted">{matches.length === 0 ? NO_MATCH_MESSAGE : 'No teammates match these filters.'}</p>
         ) : (
           <div className="mt-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {filtered.map((m) => (
-              <StudentCard key={m.id} student={m.student_profiles} score={m.score_percent} notes={m.notes} projectId={projectId} showInvite />
+              <StudentCard key={m.id} student={m.student_profiles} score={m.score_percent} notes={m.notes} skillOverlap={m.skill_overlap} details={m.details} projectId={projectId} showInvite />
             ))}
           </div>
         )}

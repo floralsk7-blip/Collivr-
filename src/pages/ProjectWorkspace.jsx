@@ -1,3 +1,4 @@
+import { visibleMatches } from '../lib/matching'
 import { useEffect, useState } from 'react'
 import { suggestTeam } from '../lib/gemini'
 import UpgradeNotice from '../components/UpgradeNotice'
@@ -304,7 +305,7 @@ function WhatIfTab({ project, members, teamScore }) {
       if (!project) return
       const { data } = await supabase.from('match_scores').select('*, student_profiles(*)').eq('project_id', project.id).order('score_percent', { ascending: false })
       const memberIds = members.map((m) => m.student_id)
-      setCandidates((data || []).filter((c) => !memberIds.includes(c.student_id)))
+      setCandidates(visibleMatches(data).filter((c) => !memberIds.includes(c.student_id)))
     }
     loadCandidates()
   }, [project, members])

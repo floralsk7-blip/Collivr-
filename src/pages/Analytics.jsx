@@ -4,6 +4,7 @@ import AppShell from '../components/AppShell'
 import UpgradeNotice from '../components/UpgradeNotice'
 import Icon from '../components/Icon'
 import { getAnalytics } from '../lib/analytics'
+import { useSubscription } from '../hooks/useSubscription'
 
 const KIND_LABEL = {
   analysis: 'Project analysis',
@@ -45,9 +46,20 @@ export default function Analytics() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
 
+  const sub = useSubscription()
+
+  // Wait until the plan is known, then ask the server. The server (analytics-summary) is the
+  // gate: Free users get 'upgrade_required', Premium/organiser users get data. Re-runs if the
+  // plan changes (for example right after activation or sign-in).
   useEffect(() => {
-    getAnalytics().then(setData).catch(setError)
-  }, [])
+    if (sub.loading) return undefined
+    let active = true
+    setError(null)
+    getAnalytics()
+      .then((result) => { if (active) { setData(result); setError(null) } })
+      .catch((err) => { if (active) { setData(null); setError(err) } })
+    return () => { active = false }
+  }, [sub.loading, sub.tier])
 
   const maxWeek = Math.max(1, ...(data?.weekly || []).map((w) => w.added))
 

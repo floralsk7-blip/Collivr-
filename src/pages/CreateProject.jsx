@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../hooks/useAuth'
+import { useSubscription } from '../hooks/useSubscription'
 import { analyzeProject } from '../lib/gemini'
 import { fetchMentorRequirements, deriveRequirementsForType } from '../lib/mentorService'
 import { analyzeMentorRequirementsRuleBased } from '../lib/mentorRequirements'
@@ -153,7 +154,11 @@ function TagInput({ tags, onChange, placeholder }) {
 
 export default function CreateProject() {
   const { user } = useAuth()
+  const { tier, loading: subscriptionLoading } = useSubscription()
   const navigate = useNavigate()
+  const [showMentorUpgrade, setShowMentorUpgrade] = useState(false)
+
+  const hasMentorPremium = tier === 'premium' || tier === 'college'
 
   const savedDraft = loadDraft()
   const [step, setStep] = useState(() => {
@@ -174,6 +179,8 @@ export default function CreateProject() {
       mentor_type_selection: '',
     }
   )
+
+  const needsMentorUpgrade = (form.mentor_preference || 'none') !== 'none' && !hasMentorPremium
 
   const [saving, setSaving] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -251,6 +258,11 @@ export default function CreateProject() {
   }
 
   function handleSelectMentorPreference(prefId) {
+    if (prefId !== 'none' && (subscriptionLoading || !hasMentorPremium)) {
+      setShowMentorUpgrade(true)
+      return
+    }
+    setShowMentorUpgrade(false)
     update('mentor_preference', prefId)
     if (prefId === 'ai') {
       if (!mentorAnalysis) {
@@ -455,6 +467,10 @@ export default function CreateProject() {
   }
 
   async function confirmMentorPreference() {
+    if ((form.mentor_preference || 'none') !== 'none' && !hasMentorPremium) {
+      setShowMentorUpgrade(true)
+      return
+    }
     setSaving(true)
     setError('')
     try {
@@ -519,6 +535,11 @@ export default function CreateProject() {
   }
 
   function handlePublish() {
+    if ((form.mentor_preference || 'none') !== 'none' && !hasMentorPremium) {
+      setStep(4)
+      setShowMentorUpgrade(true)
+      return
+    }
     clearDraft()
     navigate(project ? `/project/${project.id}` : '/discover')
   }
@@ -1078,6 +1099,24 @@ export default function CreateProject() {
                     )
                   })}
                 </div>
+
+                {(showMentorUpgrade || needsMentorUpgrade) && !hasMentorPremium && !subscriptionLoading && (
+                  <div className="flex flex-col gap-3 rounded-[12px] border border-amber-300 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-amber-900">Mentorship is a Premium feature</p>
+                      <p className="mt-1 text-xs leading-relaxed text-amber-800">
+                        Upgrade to Premium to choose a college professor, industry expert, or AI-recommended mentor. You can still continue with “No mentor needed” on the Free plan.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/pricing', { state: { message: 'Upgrade to Premium to select a mentor for your project.' } })}
+                      className="shrink-0 rounded-[9px] bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-primaryHover"
+                    >
+                      See Premium Plans
+                    </button>
+                  </div>
+                )}
 
                 {/* 1. If No mentor needed */}
                 {form.mentor_preference === 'none' && (

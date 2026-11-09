@@ -1,3 +1,4 @@
+import { visibleMatches } from '../lib/matching'
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
@@ -45,9 +46,7 @@ export default function TeamRecommendation() {
 
         if (matchError) throw matchError
 
-        const validMatches = (matchData || []).filter(
-          (match) => match.student_profiles
-        )
+        const validMatches = visibleMatches(matchData)
 
         if (cancelled) return
         setMatches(validMatches)

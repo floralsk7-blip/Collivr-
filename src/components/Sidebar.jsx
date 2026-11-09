@@ -38,6 +38,7 @@ const NAV_GROUPS = [
     label: 'Account',
     items: [
       { path: '/pricing', label: 'Plans & Billing', icon: 'crown' },
+      { path: '/invoices', label: 'Invoices', icon: 'ticket' },
       { path: '/settings', label: 'Settings', icon: 'sliders' },
     ],
   },
@@ -47,6 +48,7 @@ const ORGANISER_NAV_GROUPS = [
   { label: 'Conduct events', items: [
     { path: '/events', label: 'My Events', icon: 'ticket' },
     { path: '/pricing', label: 'Plans & Billing', icon: 'crown' },
+    { path: '/invoices', label: 'Invoices', icon: 'ticket' },
     { path: '/settings', label: 'Settings', icon: 'sliders' },
   ] },
 ]

@@ -4,20 +4,13 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../hooks/useAuth'
 import AppShell from '../components/AppShell'
 import { useProfile } from '../hooks/useProfile'
+import { EVENT_STATUS_META } from '../constants/eventStatus'
 import { EVENT_PASS_TIERS } from '../lib/pricing'
 
 const DOMAINS = ['AI/ML', 'Web Dev', 'Mobile', 'Data Science', 'Cybersecurity', 'IoT', 'Other']
 
-export const EVENT_STATUS = {
-  draft: { label: 'Draft · payment required', style: 'bg-warning/10 text-warning' },
-  pending_payment: { label: 'Awaiting payment', style: 'bg-warning/10 text-warning' },
-  published: { label: 'Published', style: 'bg-info/10 text-info' },
-  paid: { label: 'Paid · ready to publish', style: 'bg-accent/10 text-accent' },
-  teams_formed: { label: 'Teams formed', style: 'bg-primary/10 text-primary' },
-}
-
 export function StatusBadge({ status }) {
-  const s = EVENT_STATUS[status] || EVENT_STATUS.draft
+  const s = EVENT_STATUS_META[status] || EVENT_STATUS_META.draft
   return <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${s.style}`}>{s.label}</span>
 }
 
@@ -123,7 +116,6 @@ export default function Events() {
   const { user } = useAuth()
   const { profile } = useProfile()
   const [events, setEvents] = useState([])
-  const [myEvents, setMyEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
@@ -131,51 +123,27 @@ export default function Events() {
   const [domainFilter, setDomainFilter] = useState('All themes')
   const [statusFilter, setStatusFilter] = useState('All events')
 
-  useEffect(() => {
-    supabase
-      .from('events')
-      .select('*, event_participants(count)')
-      .order('created_at', { ascending: false })
-      .then(({ data, error: loadError }) => {
-        if (loadError) setError(loadError.message)
-        setEvents(data || [])
-        setLoading(false)
-      })
-  }, [])
+  const accountType = profile?.account_type || user?.user_metadata?.account_type
+  const canCreate = Boolean(accountType === 'organiser')
 
   useEffect(() => {
     let alive = true
-    async function loadMyEvents() {
-      if (!user?.id) { setMyEvents([]); return }
-      const { data: joined } = await supabase.from('event_participants').select('event_id').eq('student_id', user.id)
-      const ids = [...new Set((joined || []).map((row) => row.event_id))]
-      if (!ids.length) { if (alive) setMyEvents([]); return }
-      const { data: mine } = await supabase.from('events').select('id,name,status,registration_deadline_at').in('id', ids)
-      const { data: stages } = await supabase.from('event_stages').select('id,event_id,title,status,deadline_at,stage_order').in('event_id', ids).order('stage_order')
-      const stageIds = (stages || []).map((stage) => stage.id)
-      const { data: activities } = stageIds.length
-        ? await supabase.from('event_activities').select('id,stage_id,title,required').in('stage_id', stageIds)
-        : { data: [] }
-      const { data: submissions } = await supabase.from('event_submissions').select('activity_id,status').eq('submitted_by', user.id).in('event_id', ids)
-      const submitted = new Set((submissions || []).map((item) => item.activity_id))
-      const summaries = (mine || []).map((ev) => {
-        const visibleStages = (stages || []).filter((stage) => stage.event_id === ev.id)
-        const current = visibleStages.find((stage) => stage.status === 'open') || visibleStages[0]
-        const stageActivities = (activities || []).filter((activity) => activity.stage_id === current?.id && activity.required)
-        return {
-          ...ev, currentStage: current,
-          pending: stageActivities.filter((activity) => !submitted.has(activity.id)).length,
-          completed: stageActivities.filter((activity) => submitted.has(activity.id)).length,
-        }
-      })
-      if (alive) setMyEvents(summaries)
+    async function loadEvents() {
+      setLoading(true)
+      let query = supabase.from('events').select('*, event_participants(count)').order('created_at', { ascending: false })
+      // Organisers see only events they own. Students see only discoverable events.
+      if (canCreate) query = query.eq('organizer_id', user?.id || '')
+      else query = query.in('status', ['published', 'teams_formed'])
+      const { data, error: loadError } = await query
+      if (!alive) return
+      if (loadError) setError(loadError.message)
+      setEvents(data || [])
+      setLoading(false)
     }
-    loadMyEvents().catch((err) => { if (alive) setError(err.message) })
+    loadEvents()
     return () => { alive = false }
-  }, [user?.id])
+  }, [canCreate, user?.id])
 
-  const accountType = profile?.account_type || user?.user_metadata?.account_type
-  const canCreate = Boolean(accountType === 'organiser')
   const visibleEvents = events.filter((ev) => {
     const query = searchQuery.trim().toLowerCase()
     const matchesQuery = !query || [ev.name, ev.description, ev.domain].some((value) => String(value || '').toLowerCase().includes(query))
@@ -202,37 +170,20 @@ export default function Events() {
           )}
         </div>
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs text-muted">Available events</p><p className="mt-1 text-2xl font-bold text-text">{events.length}</p></div>
-          <div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs text-muted">Themes</p><p className="mt-1 text-2xl font-bold text-text">{eventDomains.length}</p></div>
-          <div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs text-muted">Your registrations</p><p className="mt-1 text-2xl font-bold text-text">{myEvents.length}</p></div>
-        </div>
-
-        {myEvents.length > 0 && (
-          <section className="mt-6 rounded-xl border border-border bg-surface p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div><h2 className="text-base font-bold text-text">Continue your events</h2><p className="mt-1 text-xs text-muted">Your current stages, required activities and deadlines.</p></div>
-              <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">{myEvents.length} joined</span>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {myEvents.map((ev) => (
-                <Link key={ev.id} to={`/events/${ev.id}`} className="rounded-lg bg-surface2 p-4 transition-colors hover:bg-border/40">
-                  <p className="text-sm font-semibold text-text">{ev.name}</p>
-                  <p className="mt-1 text-xs text-textSecondary">{ev.currentStage?.title || 'Event registered'} · {ev.currentStage?.status || ev.status}</p>
-                  <p className="mt-2 text-xs text-muted">{ev.pending} required task(s) pending · {ev.completed} completed</p>
-                  {(ev.currentStage?.deadline_at || ev.registration_deadline_at) && <p className="mt-1 text-xs text-muted">Deadline: {new Date(ev.currentStage?.deadline_at || ev.registration_deadline_at).toLocaleString()}</p>}
-                </Link>
-              ))}
-            </div>
-          </section>
-        )}
+        {canCreate ? (
+          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs text-muted">Events you own</p><p className="mt-1 text-2xl font-bold text-text">{events.length}</p></div>
+            <div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs text-muted">Published</p><p className="mt-1 text-2xl font-bold text-text">{events.filter((ev) => ev.status === 'published' || ev.status === 'teams_formed').length}</p></div>
+            <div className="rounded-xl border border-border bg-surface p-4"><p className="text-xs text-muted">Drafts</p><p className="mt-1 text-2xl font-bold text-text">{events.filter((ev) => ['draft', 'pending_payment', 'paid'].includes(ev.status)).length}</p></div>
+          </div>
+        ) : null}
 
 
         <div className="mt-7">
           {canCreate && ownedEvents.length > 0 && (
             <section className="mb-7 rounded-xl border border-border bg-surface p-5">
-              <h2 className="text-base font-bold text-text">Events you manage</h2>
-              <p className="mt-1 text-xs text-muted">Open an event to manage registrations, rounds, judging, results and certificates.</p>
+              <h2 className="text-base font-bold text-text">Your event workspace</h2>
+              <p className="mt-1 text-xs text-muted">Only events created by your organiser account appear here. Open a draft to edit it before publishing.</p>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 {ownedEvents.map((ev) => (
                   <Link key={ev.id} to={`/events/${ev.id}`} className="flex items-center justify-between gap-3 rounded-lg bg-surface2 p-3 hover:bg-border/40">
@@ -248,24 +199,28 @@ export default function Events() {
             <div className="mb-5 rounded-xl border border-border bg-surface p-4 text-sm text-textSecondary">Students can discover events, register and participate. Event Organiser accounts create and conduct events.</div>
           )}
 
-          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-            <div><h2 className="text-lg font-bold text-text">Explore events</h2><p className="mt-1 text-xs text-muted">Search by event name, description or theme.</p></div>
-            <span className="text-xs text-muted">Showing {visibleEvents.length} of {events.length}</span>
-          </div>
-          <div className="mb-5 grid gap-3 rounded-xl border border-border bg-surface p-3 md:grid-cols-[minmax(220px,1fr)_190px_190px]">
-            <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Search events</span><input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Try AI hackathon, design, robotics..." className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text outline-none focus:border-primary" /></label>
-            <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Theme</span><select value={domainFilter} onChange={(e) => setDomainFilter(e.target.value)} className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text outline-none focus:border-primary"><option>All themes</option>{eventDomains.map((domain) => <option key={domain}>{domain}</option>)}</select></label>
-            <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Event status</span><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text outline-none focus:border-primary"><option>All events</option><option>Registration open</option><option value="teams_formed">Teams formed</option><option value="pending_payment">Awaiting payment</option></select></label>
-          </div>
+          {!canCreate && (
+            <>
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div><h2 className="text-lg font-bold text-text">Explore events</h2><p className="mt-1 text-xs text-muted">Search by event name, description or theme.</p></div>
+              <span className="text-xs text-muted">Showing {visibleEvents.length} of {events.length}</span>
+            </div>
+            <div className="mb-5 grid gap-3 rounded-xl border border-border bg-surface p-3 md:grid-cols-[minmax(220px,1fr)_190px_190px]">
+              <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Search events</span><input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Try AI hackathon, design, robotics..." className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text outline-none focus:border-primary" /></label>
+              <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Theme</span><select value={domainFilter} onChange={(e) => setDomainFilter(e.target.value)} className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text outline-none focus:border-primary"><option>All themes</option>{eventDomains.map((domain) => <option key={domain}>{domain}</option>)}</select></label>
+              <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Event status</span><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text outline-none focus:border-primary"><option>All events</option><option>Registration open</option><option value="teams_formed">Teams formed</option><option value="pending_payment">Awaiting payment</option></select></label>
+            </div>
+            </>
+          )}
 
           {error && <p className="mb-4 rounded-lg bg-danger/10 px-4 py-3 text-sm text-danger">{error}</p>}
           {loading ? (
             <div className="grid gap-4 md:grid-cols-2"><div className="skeleton h-48 w-full rounded-xl" /><div className="skeleton h-48 w-full rounded-xl" /></div>
           ) : events.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-12 text-center"><h3 className="font-semibold text-text">No events published yet</h3><p className="mt-1 text-sm text-muted">Check back soon for new hackathons, workshops and challenges.</p></div>
+            <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-12 text-center"><h3 className="font-semibold text-text">{canCreate ? 'No events created yet' : 'No events published yet'}</h3><p className="mt-1 text-sm text-muted">{canCreate ? 'Create your first event to start managing registrations and forming teams.' : 'Check back soon for new hackathons, workshops and challenges.'}</p></div>
           ) : visibleEvents.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-10 text-center"><h3 className="font-semibold text-text">No matching events</h3><p className="mt-1 text-sm text-muted">Try another search term or clear your filters.</p><button onClick={() => { setSearchQuery(''); setDomainFilter('All themes'); setStatusFilter('All events') }} className="mt-3 text-sm font-semibold text-primary hover:underline">Clear filters</button></div>
-          ) : (
+          ) : canCreate ? null : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {visibleEvents.map((ev) => (
                 <Link key={ev.id} to={`/events/${ev.id}`} className="group flex min-h-[220px] flex-col rounded-xl border border-border bg-surface p-5 transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md">

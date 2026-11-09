@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../hooks/useAuth'
 import { useProfile } from '../hooks/useProfile'
 import { useSubscription } from '../hooks/useSubscription'
+import PaymentHistory from '../components/PaymentHistory'
 import AppShell from '../components/AppShell'
 import PlanCard from '../components/PlanCard'
 import PayPalSubscribe from '../components/PayPalSubscribe'
@@ -156,11 +157,12 @@ export default function Pricing() {
         const cfg = await getBillingConfig()
         if (!active) return
         setConfig(cfg)
+        if (cfg.entitlement) sub.apply(cfg.entitlement)
 
         // Refresh from PayPal so renewals and cancellations made elsewhere show up.
         if (cfg.entitlement?.subscriptionId) {
-          await syncSubscription()
-          if (active) sub.refresh()
+          const synced = await syncSubscription()
+          if (active && synced?.entitlement) sub.apply(synced.entitlement)
         }
       } catch (err) {
         if (active) setError(err.message)
@@ -192,9 +194,10 @@ export default function Pricing() {
     setNotice('')
 
     try {
-      await cancelSubscription(subscriptionId)
+      const result = await cancelSubscription(subscriptionId)
       setNotice('Your subscription is cancelled. You keep access until the end of the paid period.')
-      await sub.refresh()
+      if (result?.entitlement) sub.apply(result.entitlement)
+      else await sub.refresh()
     } catch (err) {
       setError(err.message)
     }
@@ -312,6 +315,10 @@ export default function Pricing() {
             <p className="mt-3 text-xs text-muted">Automatic advancement runs after an organiser closes a stage. Complex weighted judging scores are calculated and validated by the database.</p>
           </section>
         )}
+
+        <div className="mt-10">
+          <PaymentHistory />
+        </div>
 
         {isSandbox && (
           <p className="mt-5 text-xs text-muted">

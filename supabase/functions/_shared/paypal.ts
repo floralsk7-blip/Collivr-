@@ -165,3 +165,10 @@ export function cancelSubscription(subscriptionId: string, reason: string) {
     body: { reason: reason.slice(0, 128) },
   })
 }
+
+// Transactions PayPal itself recorded for one subscription between two timestamps (ISO 8601, UTC).
+// Used to build invoices for recurring payments from PayPal's own data.
+export function getSubscriptionTransactions(subscriptionId: string, startTime: string, endTime: string) {
+  const qs = `start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`
+  return paypalFetch(`/v1/billing/subscriptions/${encodeURIComponent(subscriptionId)}/transactions?${qs}`, { method: 'GET' })
+}

@@ -3,7 +3,7 @@ import MatchScoreBadge from './MatchScoreBadge'
 import InviteButton from './InviteButton'
 import ConnectButton from './ConnectButton'
 
-export default function StudentCard({ student, score, notes, skillOverlap = [], projectId, showInvite }) {
+export default function StudentCard({ student, score, notes, skillOverlap = [], details = null, projectId, showInvite }) {
   const initial = student?.name?.charAt(0)?.toUpperCase() || '?'
   const branch = student?.branch || student?.department
 
@@ -14,6 +14,19 @@ export default function StudentCard({ student, score, notes, skillOverlap = [], 
   const overlap = Array.isArray(skillOverlap)
     ? skillOverlap
     : []
+
+  const related = Array.isArray(details?.related_skills) ? details.related_skills : []
+  const missing = Array.isArray(details?.missing_skills) ? details.missing_skills : []
+
+  const hours = student?.availability_hours
+  const availabilityText = hours
+    ? `${hours}${/[a-z]/i.test(String(hours)) ? '' : ' hrs/week'}`
+    : details
+      ? 'not shared'
+      : ''
+  const collaborationText = typeof student?.open_to_collaborate === 'boolean'
+    ? (student.open_to_collaborate ? 'Open to collaborate' : 'Not currently open')
+    : ''
 
   return (
     <div className="rounded-xl border border-border bg-surface p-5 transition-colors hover:border-primary">
@@ -54,21 +67,6 @@ export default function StudentCard({ student, score, notes, skillOverlap = [], 
         <div className="mt-3 rounded-lg bg-surface2 px-3 py-2">
           <p className="text-xs leading-relaxed text-textSecondary">
             {notes}
-            {skillOverlap.length > 0 && (
-  <div className="mt-3">
-    <p className="mb-2 text-xs font-medium text-muted">matching skills</p>
-    <div className="flex flex-wrap gap-2">
-      {skillOverlap.map((skill) => (
-        <span
-          key={skill}
-          className="rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success"
-        >
-          {skill}
-        </span>
-      ))}
-    </div>
-  </div>
-)}
           </p>
         </div>
       )}
@@ -91,6 +89,47 @@ export default function StudentCard({ student, score, notes, skillOverlap = [], 
               </span>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* related, missing, availability and collaboration (from the verified match breakdown) */}
+
+      {(related.length > 0 || missing.length > 0) && (
+        <div className="mt-3 space-y-2">
+          {related.length > 0 && (
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted">Related skills</p>
+              <div className="flex flex-wrap gap-2">
+                {related.map((hit) => (
+                  <span key={hit.required} className="rounded-full border border-border bg-surface2 px-2.5 py-1 text-xs text-textSecondary">
+                    {hit.via} <span className="text-muted">for {hit.required}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {missing.length > 0 && (
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted">Missing skills</p>
+              <div className="flex flex-wrap gap-2">
+                {missing.map((m) => (
+                  <span
+                    key={m.skill}
+                    className={`rounded-full px-2.5 py-1 text-xs ${m.importance === 'critical' || m.importance === 'high' ? 'bg-danger/10 font-medium text-danger' : 'bg-surface2 text-muted'}`}
+                  >
+                    {m.skill}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(availabilityText || collaborationText) && (
+        <div className="mt-3 space-y-0.5 text-xs text-textSecondary">
+          {availabilityText && <p>Availability: {availabilityText}</p>}
+          {collaborationText && <p>Collaboration: {collaborationText}</p>}
         </div>
       )}
 

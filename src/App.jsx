@@ -25,6 +25,7 @@ import EventDetail from './pages/EventDetail'
 import Landing from './pages/Landing'
 import Pricing from './pages/Pricing'
 import Analytics from './pages/Analytics'
+import Invoices from './pages/Invoices'
 import Mentors from './pages/Mentors'
 import PaymentSuccess from './pages/PaymentSuccess'
 import EventCertificate from './pages/EventCertificate'
@@ -102,6 +103,7 @@ export default function App() {
       <Route path="/mentor/dashboard" element={<Protected><Suspense fallback={<RouteLoadingFallback />}><MentorDashboard /></Suspense></Protected>} />
       <Route path="/student/mentorships" element={<Protected><StudentOnly><Suspense fallback={<RouteLoadingFallback />}><StudentMentorships /></Suspense></StudentOnly></Protected>} />
       <Route path="/pricing" element={<Protected><Pricing /></Protected>} />
+      <Route path="/invoices" element={<Protected><Invoices /></Protected>} />
       <Route path="/events" element={<Protected><Events /></Protected>} />
       <Route path="/events/:id" element={<Protected><EventDetail /></Protected>} />
       <Route path="/certificates/:id" element={<Protected><EventCertificate /></Protected>} />

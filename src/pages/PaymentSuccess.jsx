@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { activateSubscription, syncSubscription } from '../lib/subscriptions'
+import { useSubscription } from '../hooks/useSubscription'
 
 export default function PaymentSuccess() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const [message, setMessage] = useState('Verifying your PayPal subscription...')
   const [error, setError] = useState('')
+  const { apply, refresh } = useSubscription()
 
   useEffect(() => {
     let cancelled = false
@@ -27,9 +29,14 @@ export default function PaymentSuccess() {
           if (cancelled) return
           setMessage('PayPal is confirming your subscription...')
           await new Promise(resolve => setTimeout(resolve, 3000))
-          await syncSubscription()
+          const synced = await syncSubscription()
+          if (synced?.entitlement?.tier && synced.entitlement.tier !== 'free') apply(synced.entitlement)
           result = await activateSubscription(subscriptionId, planKey)
         }
+
+        // Publish the authoritative entitlement to the whole app straight away, then confirm.
+        if (result.entitlement) apply(result.entitlement)
+        refresh()
 
         if (cancelled) return
 
@@ -45,6 +52,7 @@ export default function PaymentSuccess() {
 
     verify()
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params])
 
   return (

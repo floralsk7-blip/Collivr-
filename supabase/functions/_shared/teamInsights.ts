@@ -38,6 +38,7 @@ export function specOf(project: ProjectLike): EventSpec {
 // Weights: skills 55, experience fit 20, interest in the domain 15, availability 10.
 // ---------------------------------------------------------------------------
 export type StudentMatch = {
+  details?: Record<string, unknown>
   student_id: string
   score_percent: number
   skill_overlap: string[]

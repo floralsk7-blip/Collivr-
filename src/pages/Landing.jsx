@@ -110,15 +110,12 @@ export default function Landing() {
         <div className="mx-auto max-w-content px-6 py-16">
           <h2 className="text-3xl font-bold">Simple pricing</h2>
           <p className="mt-2 text-textSecondary">Free for students. Upgrade when your projects get serious.</p>
-          <div className="mt-10 grid gap-6 lg:grid-cols-3">
+          <div className="mt-10 grid gap-6 lg:grid-cols-2">
             <PlanCard name={PLAN_COPY.free.name} tag={PLAN_COPY.free.tag} price="$0" per="forever" blurb={PLAN_COPY.free.blurb} features={PLAN_COPY.free.features}>
               <Link to="/login?mode=signup" className="block rounded-lg border border-borderStrong py-2.5 text-center text-sm font-semibold text-text hover:bg-surface2">Start free</Link>
             </PlanCard>
             <PlanCard name={PLAN_COPY.premium.name} tag={PLAN_COPY.premium.tag} price={`$${PLAN_DEFS.premium_monthly.price}`} per="/ month" blurb={PLAN_COPY.premium.blurb} features={PLAN_COPY.premium.features} highlight badge="Popular">
               <Link to="/login?mode=signup" className="block rounded-lg bg-primary py-2.5 text-center text-sm font-semibold text-white hover:bg-primaryHover">Get Premium</Link>
-            </PlanCard>
-            <PlanCard name={PLAN_COPY.college.name} tag={PLAN_COPY.college.tag} price={`$${PLAN_DEFS.college_yearly.price.replace('.00', '')}`} per="/ year" blurb={PLAN_COPY.college.blurb} features={PLAN_COPY.college.features}>
-              <Link to="/login?mode=signup" className="block rounded-lg border border-borderStrong py-2.5 text-center text-sm font-semibold text-text hover:bg-surface2">Choose College</Link>
             </PlanCard>
           </div>
 

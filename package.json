@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test:optimizer": "node --experimental-strip-types scripts/test-optimizer.mjs",
-    "test": "npm run test:optimizer && npm run test:insights && npm run test:ai && npm run test:analytics && npm run test:plans && npm run test:payments && npm run test:event-first && npm run check:imports",
+    "test": "npm run test:optimizer && npm run test:insights && npm run test:ai && npm run test:analytics && npm run test:plans && npm run test:payments && npm run test:subscription-store && npm run test:invoices && npm run test:skill-matching && npm run test:event-first && npm run check:imports",
     "check:setup": "node scripts/check-setup.mjs",
     "test:insights": "node --experimental-strip-types scripts/test-insights.mjs",
     "test:plans": "node --experimental-strip-types scripts/test-plans.mjs",
@@ -18,7 +18,10 @@
     "test:payments": "node --experimental-strip-types scripts/test-payments.mjs",
     "test:ai": "node --experimental-strip-types scripts/test-ai.mjs",
     "test:analytics": "node --experimental-strip-types scripts/test-analytics.mjs",
-    "test:event-first": "node scripts/test-event-first-model.mjs"
+    "test:event-first": "node scripts/test-event-first-model.mjs",
+    "test:subscription-store": "node --experimental-strip-types scripts/test-subscription-store.mjs",
+    "test:invoices": "node --experimental-strip-types scripts/test-invoices.mjs",
+    "test:skill-matching": "node --experimental-strip-types scripts/test-skill-matching.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -38,4 +41,5 @@
     "tailwindcss": "^3.4.19",
     "vite": "^5.4.21"
   }
+   "license": "MIT"
 }

@@ -1,199 +1,143 @@
-
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 
-import {
-  adminClient,
-  corsHeaders,
-  errorResponse,
-  json,
-  requireUser,
-  requireUuid,
-} from '../_shared/http.ts'
-
+import { adminClient, corsHeaders, errorResponse, json, requireUser, requireUuid } from '../_shared/http.ts'
 import { callGeminiJson } from '../_shared/gemini.ts'
 import { assertProjectAccess, withAi } from '../_shared/entitlements.ts'
-import type { StudentMatch } from '../_shared/teamInsights.ts'
 import { STUDENT_COLUMNS } from '../_shared/students.ts'
 import { hashJson } from '../_shared/aiGate.ts'
-import { buildMatchPrompt, parseAiMatchResults } from '../_shared/aiPrompts.ts'
 import { getCached, putCached } from '../_shared/aiCache.ts'
-import type { Student } from '../_shared/teamOptimizer.ts'
+import { IMPORTANCE_MULTIPLIER, buildSemanticPrompt, collectAmbiguity, sanitizeSemantics, uniqueRequired, type Semantics } from '../_shared/matchSemantics.ts'
+import { MATCH_ALGORITHM_VERSION, WEIGHTS, rankEligible, type MatchStudent } from '../_shared/skillFirstMatching.ts'
 
+export const NO_MATCH_NOTICE =
+  "No students currently match this project's required skills. Try adjusting the project requirements or check again later."
+
+// Skill-first matching. Gemini judges meaning (skill importance, wording it does not know,
+// role and interest relevance); the backend validates that and computes every score itself.
+// Pipeline: fetch real profiles -> ask Gemini (or reuse cached judgements) -> validate ->
+// deterministic scoring -> skill-eligibility gate -> save.
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
     const user = await requireUser(req)
     const body = await req.json().catch(() => ({}))
     const projectId = requireUuid(body.projectId, 'project')
-
     const admin = adminClient()
 
-    const project = await assertProjectAccess(
-      admin,
-      user.id,
-      projectId,
-      true,
-    )
+    const project = await assertProjectAccess(admin, user.id, projectId, true)
 
-    // Fetch eligible student profiles.
     const { data: students, error } = await admin
       .from('student_profiles')
-      .select(STUDENT_COLUMNS)
+      .select(`${STUDENT_COLUMNS}, open_to_collaborate, account_type`)
       .neq('id', project.creator_id)
       .neq('id', user.id)
       .limit(500)
-
     if (error) throw new Error(error.message)
 
-    const list = (students ?? []) as Student[]
+    const list = ((students ?? []) as MatchStudent[]).filter((s) => s.account_type !== 'organiser')
 
-    if (list.length === 0) {
-      return json({
-        matches: [],
-        source: 'ai',
-        notice: 'No eligible student profiles were found.',
-      })
-    }
-
-    const { data: projectAnalysis, error: analysisError } = await admin
+    const { data: analysis, error: analysisError } = await admin
       .from('ai_analysis')
       .select('identified_roles, skill_gaps')
       .eq('project_id', projectId)
       .maybeSingle()
-
     if (analysisError) throw new Error(analysisError.message)
-    const identifiedRoles = projectAnalysis?.identified_roles ?? []
+    const roles: string[] = (analysis?.identified_roles ?? []).filter((r: unknown) => typeof r === 'string' && r.trim())
 
-    // Include all candidate profile information in the cache key.
-    // This prevents stale results when student profiles change.
-    const hash = await hashJson({
-      // Bump whenever scoring/eligibility rules change so old AI scores
-      // cannot survive a prompt or policy update for otherwise unchanged data.
-      matching_algorithm_version: 'core-skill-or-interest-gate-v2-60-15-10-5-5-5',
-      project: {
-        id: project.id,
-        name: project.name,
-        description: project.description,
-        domain: project.domain,
-        skills_required: project.skills_required ?? [],
-        experience_required: project.experience_required,
-        team_size: project.team_size,
-        deadline: project.deadline ?? null,
-        identified_roles: identifiedRoles,
-      },
-      candidates: list.map((student) => ({
-        id: student.id,
-        skills: student.skills ?? [],
-        skills_detailed: student.skills_detailed ?? [],
-        experience: student.experience,
-        interests: student.project_interests ?? [],
-        availability: student.availability_hours,
-        branch: student.branch,
-        department: student.department,
-        previous_projects: student.previous_projects ?? [],
-      })),
-    })
+    const required = uniqueRequired(project.skills_required)
+    const exclude = [project.creator_id, user.id]
+    let semantic: Semantics
+    let final
 
-    // Reuse successful AI results for unchanged inputs.
-    const cached = await getCached(
-      admin,
-      projectId,
-      'matching',
-      hash,
-    )
-
-    let final: StudentMatch[]
-
-    if (cached?.matches) {
-      final = (cached.matches as StudentMatch[]).filter(
-        (match) =>
-          list.some((student) => student.id === match.student_id) &&
-          match.student_id !== user.id &&
-          match.student_id !== project.creator_id,
-      )
+    if (required.length === 0 || list.length === 0) {
+      // Nothing to compare: do not spend an AI action, and do not invent matches.
+      final = []
     } else {
-      const outcome = await withAi<StudentMatch[]>(
-        admin,
-        user.id,
-        'matching',
+      const ambiguity = collectAmbiguity(required, project.domain, list)
 
-        async () => {
-          // Gemini evaluates the complete candidate list.
-          const raw = await callGeminiJson<unknown>(
-            buildMatchPrompt(
-              { ...project, identified_roles: identifiedRoles },
-              list.map((student) => ({ student })),
-            ),
-          )
-
-          // Validate AI decisions against actual student profiles.
-          return parseAiMatchResults(
-  raw,
-  list,
-  project.skills_required ?? [],
-)
+      // Everything that can change a match is part of the key, so stale answers are never reused.
+      const hash = await hashJson({
+        matching_algorithm_version: MATCH_ALGORITHM_VERSION,
+        weights: WEIGHTS,
+        importance_multipliers: IMPORTANCE_MULTIPLIER,
+        project: {
+          id: project.id,
+          name: project.name,
+          description: project.description,
+          domain: project.domain,
+          skills_required: project.skills_required ?? [],
+          experience_required: project.experience_required,
+          team_size: project.team_size,
+          deadline: project.deadline ?? null,
+          identified_roles: roles,
         },
+        candidates: list.map((s) => ({
+          id: s.id,
+          skills: s.skills ?? [],
+          skills_detailed: s.skills_detailed ?? [],
+          experience: s.experience ?? null,
+          interests: s.project_interests ?? [],
+          availability: s.availability_hours ?? null,
+          collaboration: s.open_to_collaborate ?? null,
+          branch: s.branch ?? null,
+          department: s.department ?? null,
+        })),
+      })
 
-        // Do not return rule-based recommendations if AI fails
-        // or the user's AI quota is exhausted.
-        () => {
-          throw new Error(
-            'AI matching is unavailable or your AI quota has been reached. Please try again or check your plan.',
-          )
-        },
-      )
+      const cached = await getCached(admin, projectId, 'matching', hash)
 
-      final = outcome.value.filter(
-        (match) =>
-          list.some((student) => student.id === match.student_id) &&
-          match.student_id !== user.id &&
-          match.student_id !== project.creator_id,
-      )
-
-      if (outcome.source !== 'ai') {
-        throw new Error(
-          outcome.notice ?? 'AI matching could not be completed.',
+      if (cached?.algorithm_version === MATCH_ALGORITHM_VERSION && cached?.semantic) {
+        // Cached judgements are re-validated, and scores are always recomputed from the live profiles.
+        semantic = sanitizeSemantics(cached.semantic, required, roles, ambiguity)
+      } else {
+        const outcome = await withAi<Semantics>(
+          admin,
+          user.id,
+          'matching',
+          async () => {
+            const raw = await callGeminiJson<unknown>(buildSemanticPrompt(project, required, roles, ambiguity))
+            return sanitizeSemantics(raw, required, roles, ambiguity)
+          },
+          // No fake recommendations when AI is unavailable or the quota is used up.
+          () => {
+            throw new Error('AI matching is unavailable or your AI quota has been reached. Please try again or check your plan.')
+          },
         )
+        if (outcome.source !== 'ai') throw new Error(outcome.notice ?? 'AI matching could not be completed.')
+        semantic = outcome.value
+        await putCached(admin, projectId, 'matching', hash, { algorithm_version: MATCH_ALGORITHM_VERSION, semantic })
       }
 
-      await putCached(
-        admin,
-        projectId,
-        'matching',
-        hash,
-        { matches: final },
-      )
+      final = rankEligible(list, project, roles, semantic, exclude)
     }
 
     // Replace previous results for this project.
-    const { error: deleteError } = await admin
-      .from('match_scores')
-      .delete()
-      .eq('project_id', projectId)
-
+    const { error: deleteError } = await admin.from('match_scores').delete().eq('project_id', projectId)
     if (deleteError) throw new Error(deleteError.message)
 
-    const { error: insertError } = await admin
-      .from('match_scores')
-      .insert(
-        final.map((match) => ({
-          project_id: projectId,
-          student_id: match.student_id,
-          score_percent: match.score_percent,
-          skill_overlap: match.skill_overlap,
-          notes: match.notes,
-        })),
-      )
-
-    if (insertError) throw new Error(insertError.message)
+    if (final.length > 0) {
+      const rows = final.map((m) => ({
+        project_id: projectId,
+        student_id: m.student_id,
+        score_percent: m.score_percent,
+        skill_overlap: m.skill_overlap,
+        notes: m.notes,
+        details: m.details,
+      }))
+      let { error: insertError } = await admin.from('match_scores').insert(rows)
+      if (insertError && /details/i.test(insertError.message)) {
+        // The optional `details` column has not been added yet: still save the core result.
+        console.warn('match_scores.details is missing; apply the 20261121 migration to show full breakdowns.')
+        ;({ error: insertError } = await admin.from('match_scores').insert(rows.map(({ details: _details, ...rest }) => rest)))
+      }
+      if (insertError) throw new Error(insertError.message)
+    }
 
     return json({
       matches: final,
       source: 'ai',
-      notice: null,
+      notice: final.length === 0 ? NO_MATCH_NOTICE : null,
       code: null,
     })
   } catch (err) {

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../hooks/useAuth'
+import { useSubscription } from '../hooks/useSubscription'
 import { analyzeProject, matchStudents } from '../lib/gemini'
 import { discoverMentorsForProject } from '../lib/mentorMatchingService'
 import AppShell from '../components/AppShell'
@@ -19,7 +20,18 @@ import {
 export default function ProjectDetail() {
   const { id } = useParams()
   const { user } = useAuth()
+  const { tier: subscriptionTier, loading: subscriptionLoading } = useSubscription()
   const navigate = useNavigate()
+  const hasMentorshipAccess = subscriptionTier === 'premium'
+
+  function requirePremiumMentorship() {
+    if (subscriptionLoading) return false
+    if (!hasMentorshipAccess) {
+      navigate('/pricing', { state: { message: 'Upgrade to Premium to request or book a mentor.' } })
+      return false
+    }
+    return true
+  }
 
   const [project, setProject] = useState(null)
   const [analysis, setAnalysis] = useState(null)
@@ -32,6 +44,16 @@ export default function ProjectDetail() {
   const [matchNotice, setMatchNotice] = useState('')
   const [matchSource, setMatchSource] = useState('')
   const [analysisNotice, setAnalysisNotice] = useState('')
+
+  // Project join-request workflow
+  const [viewerAccountType, setViewerAccountType] = useState(null)
+  const [myJoinRequest, setMyJoinRequest] = useState(null)
+  const [joinRequests, setJoinRequests] = useState([])
+  const [joinRequestMessage, setJoinRequestMessage] = useState('')
+  const [joinRequestBusy, setJoinRequestBusy] = useState(false)
+  const [joinRequestActionId, setJoinRequestActionId] = useState(null)
+  const [joinRequestError, setJoinRequestError] = useState('')
+  const [joinRequestNotice, setJoinRequestNotice] = useState('')
 
   const [matchedMentors, setMatchedMentors] = useState([])
   const [loadingMentors, setLoadingMentors] = useState(false)
@@ -50,6 +72,10 @@ export default function ProjectDetail() {
 
     async function load() {
       setLoading(true)
+      setMyJoinRequest(null)
+      setJoinRequests([])
+      setJoinRequestError('')
+      setJoinRequestNotice('')
 
       try {
         const { data: proj, error: projError } = await supabase
@@ -84,6 +110,68 @@ export default function ProjectDetail() {
           }
         }
         setProject(effectiveProj)
+        setJoinRequestError('')
+        setJoinRequestNotice('')
+
+        const creator = user && proj.creator_id === user.id
+
+        if (user?.id) {
+          const { data: viewerProfile, error: viewerProfileError } = await supabase
+            .from('student_profiles')
+            .select('account_type')
+            .eq('id', user.id)
+            .maybeSingle()
+
+          if (!cancelled) {
+            setViewerAccountType(
+              viewerProfile?.account_type || user.user_metadata?.account_type || null
+            )
+          }
+
+          if (viewerProfileError) {
+            console.warn('Could not read viewer account type:', viewerProfileError)
+          }
+        } else if (!cancelled) {
+          setViewerAccountType(null)
+        }
+
+        // Load applications received by the project creator, or the current
+        // student's own application. A missing migration is surfaced in this
+        // panel without preventing the rest of the project page from loading.
+        try {
+          if (creator) {
+            const { data: requests, error: requestsError } = await supabase
+              .from('project_join_requests')
+              .select(`
+                id, project_id, requester_id, message, status, created_at,
+                student_profiles!project_join_requests_requester_id_fkey (
+                  id, name, photo_url, college, department, skills
+                )
+              `)
+              .eq('project_id', id)
+              .order('created_at', { ascending: false })
+
+            if (requestsError) throw requestsError
+            if (!cancelled) setJoinRequests(requests || [])
+          } else if (user?.id) {
+            const { data: request, error: requestError } = await supabase
+              .from('project_join_requests')
+              .select('id, status, message, created_at')
+              .eq('project_id', id)
+              .eq('requester_id', user.id)
+              .maybeSingle()
+
+            if (requestError) throw requestError
+            if (!cancelled) setMyJoinRequest(request || null)
+          }
+        } catch (requestLoadError) {
+          console.warn('Could not load project join requests:', requestLoadError)
+          if (!cancelled) {
+            setJoinRequestError(
+              requestLoadError?.message || 'Could not load project join requests.'
+            )
+          }
+        }
 
         const { data: existingAnalysis } = await supabase
           .from('ai_analysis')
@@ -105,8 +193,6 @@ export default function ProjectDetail() {
         )
 
         setLoading(false)
-
-        const creator = user && proj.creator_id === user.id
 
         if (creator && !existingAnalysis) {
           runAnalysis(proj)
@@ -167,6 +253,14 @@ export default function ProjectDetail() {
   }, [id, user?.id])
 
   const isCreator = project && user && project.creator_id === user.id
+  const canRequestToJoin = Boolean(
+    user && !isCreator && viewerAccountType === 'student'
+  )
+  const projectAcceptingJoinRequests = Boolean(
+    project &&
+    ['open', 'forming'].includes(project.status || 'open') &&
+    (!project.deadline || new Date(`${project.deadline}T23:59:59`).getTime() >= Date.now())
+  )
 
   async function runAnalysis(proj) {
     setAnalyzing(true)
@@ -290,6 +384,107 @@ export default function ProjectDetail() {
     navigate(`/team/${project.id}/recommend`)
   }
 
+  async function handleSubmitJoinRequest(e) {
+    e?.preventDefault()
+    if (!user?.id || !project || !canRequestToJoin || !projectAcceptingJoinRequests) return
+
+    setJoinRequestBusy(true)
+    setJoinRequestError('')
+    setJoinRequestNotice('')
+
+    const payload = {
+      status: 'pending',
+      message: joinRequestMessage.trim() || null,
+    }
+
+    const result = myJoinRequest
+      ? await supabase
+          .from('project_join_requests')
+          .update(payload)
+          .eq('id', myJoinRequest.id)
+          .eq('requester_id', user.id)
+          .select('id, status, message, created_at')
+          .single()
+      : await supabase
+          .from('project_join_requests')
+          .insert({
+            project_id: project.id,
+            requester_id: user.id,
+            ...payload,
+          })
+          .select('id, status, message, created_at')
+          .single()
+
+    setJoinRequestBusy(false)
+
+    if (result.error) {
+      setJoinRequestError(result.error.message)
+      return
+    }
+
+    setMyJoinRequest(result.data)
+    setJoinRequestMessage('')
+    setJoinRequestNotice('Your request has been sent to the project creator.')
+  }
+
+  async function handleWithdrawJoinRequest() {
+    if (!user?.id || !myJoinRequest?.id) return
+
+    setJoinRequestBusy(true)
+    setJoinRequestError('')
+    setJoinRequestNotice('')
+
+    const { data, error } = await supabase
+      .from('project_join_requests')
+      .update({ status: 'withdrawn' })
+      .eq('id', myJoinRequest.id)
+      .eq('requester_id', user.id)
+      .select('id, status, message, created_at')
+      .single()
+
+    setJoinRequestBusy(false)
+
+    if (error) {
+      setJoinRequestError(error.message)
+      return
+    }
+
+    setMyJoinRequest(data)
+    setJoinRequestNotice('Your join request has been withdrawn.')
+  }
+
+  async function handleJoinRequestDecision(request, nextStatus) {
+    if (!isCreator || !request?.id || !['accepted', 'declined'].includes(nextStatus)) return
+
+    setJoinRequestActionId(request.id)
+    setJoinRequestError('')
+    setJoinRequestNotice('')
+
+    const { data, error } = await supabase
+      .from('project_join_requests')
+      .update({ status: nextStatus })
+      .eq('id', request.id)
+      .eq('project_id', project.id)
+      .select('id, status')
+      .single()
+
+    setJoinRequestActionId(null)
+
+    if (error) {
+      setJoinRequestError(error.message)
+      return
+    }
+
+    setJoinRequests((current) =>
+      current.map((item) => item.id === request.id ? { ...item, ...data } : item)
+    )
+    setJoinRequestNotice(
+      nextStatus === 'accepted'
+        ? 'Application accepted. The student has been added to your accepted Team Formation invitations.'
+        : 'Application declined.'
+    )
+  }
+
   if (loading) {
     return (
       <AppShell>
@@ -316,7 +511,7 @@ export default function ProjectDetail() {
     <AppShell
       breadcrumb={
         <span>
-          My Projects <span className="mx-1">›</span> {project.name}
+          {isCreator ? 'My Projects' : 'Find Projects'} <span className="mx-1">›</span> {project.name}
         </span>
       }
     >
@@ -387,6 +582,156 @@ export default function ProjectDetail() {
             </span>
           )}
         </div>
+
+        {/* Project join requests: applicants see the request action; creators
+            see applications and can accept or decline them. */}
+        {isCreator && (
+          <section className="mt-8 rounded-xl border border-border bg-surface p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-text">Project Join Requests</h2>
+                <p className="mt-1 text-xs text-muted">
+                  Review students who want to join your project.
+                </p>
+              </div>
+              <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                {joinRequests.filter((request) => request.status === 'pending').length} pending
+              </span>
+            </div>
+
+            {joinRequestError && (
+              <p className="mt-3 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+                Join requests could not be loaded: {joinRequestError}
+              </p>
+            )}
+            {joinRequestNotice && (
+              <p className="mt-3 rounded-lg bg-accent/10 px-3 py-2 text-xs text-accent">
+                {joinRequestNotice}
+              </p>
+            )}
+
+            {joinRequests.length === 0 ? (
+              <p className="mt-4 text-sm text-muted">
+                No students have requested to join yet. Students can send a request from this project’s detail page.
+              </p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {joinRequests.map((request) => {
+                  const applicant = request.student_profiles
+                  const isPending = request.status === 'pending'
+                  return (
+                    <div key={request.id} className="flex flex-col gap-3 rounded-lg border border-border bg-bg p-4 sm:flex-row sm:items-start">
+                      <div className="flex min-w-0 flex-1 items-start gap-3">
+                        {applicant?.photo_url ? (
+                          <img src={applicant.photo_url} alt={applicant.name || 'Student'} className="h-10 w-10 rounded-full object-cover" />
+                        ) : (
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
+                            {(applicant?.name || 'S').charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-text">{applicant?.name || 'Student'}</p>
+                          <p className="mt-0.5 text-xs text-muted">
+                            {[applicant?.college, applicant?.department].filter(Boolean).join(' · ') || 'Student applicant'}
+                          </p>
+                          {request.message && (
+                            <p className="mt-2 whitespace-pre-wrap text-sm text-textSecondary">{request.message}</p>
+                          )}
+                          <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${request.status === 'accepted' ? 'bg-accent/10 text-accent' : request.status === 'declined' ? 'bg-danger/10 text-danger' : request.status === 'pending' ? 'bg-warning/10 text-warning' : 'bg-surface2 text-muted'}`}>
+                            {request.status}
+                          </span>
+                        </div>
+                      </div>
+                      {isPending && (
+                        <div className="flex shrink-0 gap-2 sm:pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleJoinRequestDecision(request, 'accepted')}
+                            disabled={joinRequestActionId === request.id || !projectAcceptingJoinRequests}
+                            className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {joinRequestActionId === request.id ? 'Saving...' : 'Accept'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleJoinRequestDecision(request, 'declined')}
+                            disabled={joinRequestActionId === request.id}
+                            className="rounded-lg border border-danger/30 px-3 py-2 text-xs font-semibold text-danger disabled:opacity-50"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {canRequestToJoin && (
+          <section className="mt-8 rounded-xl border border-primary/20 bg-surface p-5">
+            <h2 className="text-base font-bold text-text">Interested in joining this project?</h2>
+            <p className="mt-1 text-sm text-muted">
+              Send the project creator a short note about how you can contribute.
+            </p>
+
+            {joinRequestError && (
+              <p className="mt-3 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+                {joinRequestError}
+              </p>
+            )}
+            {joinRequestNotice && (
+              <p className="mt-3 rounded-lg bg-accent/10 px-3 py-2 text-xs text-accent">
+                {joinRequestNotice}
+              </p>
+            )}
+
+            {myJoinRequest?.status === 'accepted' ? (
+              <p className="mt-4 rounded-lg bg-accent/10 px-3 py-3 text-sm font-medium text-accent">
+                Your request was accepted. The project creator can now include you when finalising the team.
+              </p>
+            ) : myJoinRequest?.status === 'pending' ? (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-warning/10 px-3 py-3">
+                <p className="text-sm font-medium text-warning">Your request is waiting for the project creator.</p>
+                <button
+                  type="button"
+                  onClick={handleWithdrawJoinRequest}
+                  disabled={joinRequestBusy}
+                  className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-textSecondary disabled:opacity-50"
+                >
+                  {joinRequestBusy ? 'Please wait...' : 'Withdraw request'}
+                </button>
+              </div>
+            ) : projectAcceptingJoinRequests ? (
+              <form onSubmit={handleSubmitJoinRequest} className="mt-4 space-y-3">
+                <textarea
+                  value={joinRequestMessage}
+                  onChange={(e) => setJoinRequestMessage(e.target.value)}
+                  maxLength={500}
+                  rows={3}
+                  placeholder="Introduce yourself and explain how you can contribute (optional)."
+                  className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-muted focus:border-primary focus:outline-none"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs text-muted">{joinRequestMessage.length}/500 characters</p>
+                  <button
+                    type="submit"
+                    disabled={joinRequestBusy}
+                    className="rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {joinRequestBusy ? 'Sending...' : myJoinRequest ? 'Send request again' : 'Request to Join'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <p className="mt-4 rounded-lg bg-surface2 px-3 py-3 text-sm text-muted">
+                This project is not currently accepting new join requests.
+              </p>
+            )}
+          </section>
+        )}
 
         {/* ai project analysis */}
 
@@ -527,6 +872,12 @@ export default function ProjectDetail() {
         {/* AI Matched Mentors Section */}
         {project.mentor_preference && project.mentor_preference !== 'none' && (
           <div className="mt-12 border-t border-border pt-8">
+            {!subscriptionLoading && !hasMentorshipAccess && (
+              <UpgradeNotice
+                className="mb-5"
+                message="Mentor discovery is visible to everyone, but requesting or booking a mentor is a Premium feature. Upgrade to continue."
+              />
+            )}
             <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -723,7 +1074,7 @@ export default function ProjectDetail() {
 
                         <button
                           type="button"
-                          onClick={() => setBookingMentor(mentor)}
+                          onClick={() => { if (requirePremiumMentorship()) setBookingMentor(mentor) }}
                           className="rounded-[8px] bg-primary px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-primaryHover shadow-sm"
                         >
                           Book Session →
@@ -737,7 +1088,13 @@ export default function ProjectDetail() {
         )}
 
         {/* Project Mentorship Workspace (Sub-phase 8) */}
-        {project.mentor_preference && project.mentor_preference !== 'none' && (
+        {project.mentor_preference && project.mentor_preference !== 'none' && !subscriptionLoading && !hasMentorshipAccess && (
+          <UpgradeNotice
+            className="mt-8"
+            message="The Mentorship Workspace is included with Premium. Upgrade to access mentor collaboration, milestones, and guidance notes."
+          />
+        )}
+        {project.mentor_preference && project.mentor_preference !== 'none' && hasMentorshipAccess && (
           <div className="mt-12 border-t border-border pt-8 space-y-6">
             <div className="flex flex-col justify-between gap-2 md:flex-row md:items-center">
               <div>
@@ -755,12 +1112,13 @@ export default function ProjectDetail() {
                 </p>
               </div>
 
-              <Link
-                to="/student/mentorships"
+              <button
+                type="button"
+                onClick={requirePremiumMentorship}
                 className="text-xs font-semibold text-primary hover:underline"
               >
                 View Full Mentorship Hub →
-              </Link>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
