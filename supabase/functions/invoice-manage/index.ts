@@ -46,35 +46,64 @@ serve(async (req) => {
         .limit(1)
         .maybeSingle()
       const startedAt = new Date(sub.started_at)
-      const from = latest?.paid_at ? new Date(new Date(latest.paid_at).getTime() - 86_400_000) : startedAt
+      // PayPal can record the first charge just before COLLIVRA finishes saving
+      // the ACTIVE subscription. Look back 30 days on the first sync so that
+      // initial payment is not excluded by started_at. Later syncs overlap the
+      // most recent invoice by one day to safely catch boundary timestamps.
+      const from = latest?.paid_at
+        ? new Date(new Date(latest.paid_at).getTime() - 86_400_000)
+        : new Date(startedAt.getTime() - 30 * 86_400_000)
       const safeFrom = Number.isNaN(from.getTime()) ? new Date(now.getTime() - 30 * 86_400_000) : from
 
       for (const w of transactionWindows(new Date(Math.max(safeFrom.getTime(), 0)), now)) {
-        let page
+        let firstPage
         try {
-          page = await getSubscriptionTransactions(sub.paypal_subscription_id, w.start, w.end)
+          firstPage = await getSubscriptionTransactions(sub.paypal_subscription_id, w.start, w.end, 1)
         } catch (err) {
           const msg = err instanceof PayPalError ? err.message : String(err)
           console.error('Invoice sync: PayPal lookup failed for', sub.paypal_subscription_id, msg)
           problems.push(`Could not read PayPal payments for ${sub.plan_key}.`)
           break
         }
-        for (const tx of page?.transactions ?? []) {
-          const inv = mapSubscriptionTransaction(tx, sub, def.name)
-          if (!inv) continue
-          const { data: id, error: rpcError } = await admin.rpc('record_invoice', {
-            p_user: inv.user_id,
-            p_source_type: inv.source_type,
-            p_source_ref: inv.source_ref,
-            p_transaction_id: inv.transaction_id,
-            p_description: inv.description,
-            p_amount: inv.amount,
-            p_currency: inv.currency,
-            p_paid_at: inv.paid_at,
-            p_plan_key: inv.plan_key,
-            p_metadata: inv.metadata,
-          })
-          if (rpcError) { console.error('record_invoice failed:', rpcError.message); problems.push('One payment could not be recorded.') } else if (id) created += 1
+
+        // PayPal paginates subscription transaction history. Read every reported
+        // page; otherwise older completed charges can silently be left un-invoiced.
+        const totalPages = Math.max(1, Math.min(100, Number(firstPage?.total_pages) || 1))
+        for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+          let page = firstPage
+          if (pageNumber > 1) {
+            try {
+              page = await getSubscriptionTransactions(sub.paypal_subscription_id, w.start, w.end, pageNumber)
+            } catch (err) {
+              const msg = err instanceof PayPalError ? err.message : String(err)
+              console.error('Invoice sync: PayPal page lookup failed for', sub.paypal_subscription_id, pageNumber, msg)
+              problems.push(`Could not read all PayPal payments for ${sub.plan_key}.`)
+              break
+            }
+          }
+
+          for (const tx of page?.transactions ?? []) {
+            const inv = mapSubscriptionTransaction(tx, sub, def.name)
+            if (!inv) continue
+            const { data: id, error: rpcError } = await admin.rpc('record_invoice', {
+              p_user: inv.user_id,
+              p_source_type: inv.source_type,
+              p_source_ref: inv.source_ref,
+              p_transaction_id: inv.transaction_id,
+              p_description: inv.description,
+              p_amount: inv.amount,
+              p_currency: inv.currency,
+              p_paid_at: inv.paid_at,
+              p_plan_key: inv.plan_key,
+              p_metadata: inv.metadata,
+            })
+            if (rpcError) {
+              console.error('record_invoice failed:', rpcError.message)
+              problems.push('One payment could not be recorded.')
+            } else if (id) {
+              created += 1
+            }
+          }
         }
       }
     }
