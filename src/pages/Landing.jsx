@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import Logo from '../components/Logo'
@@ -29,6 +30,8 @@ const SAMPLE = [
 
 export default function Landing() {
   const { user, loading } = useAuth()
+  const [premiumBilling, setPremiumBilling] = useState('monthly')
+  const premiumPlan = premiumBilling === 'yearly' ? PLAN_DEFS.premium_yearly : PLAN_DEFS.premium_monthly
   if (!loading && user) return <Navigate to="/dashboard" replace />
 
   return (
@@ -110,11 +113,35 @@ export default function Landing() {
         <div className="mx-auto max-w-content px-6 py-16">
           <h2 className="text-3xl font-bold">Simple pricing</h2>
           <p className="mt-2 text-textSecondary">Free for students. Upgrade when your projects get serious.</p>
-          <div className="mt-10 grid gap-6 lg:grid-cols-2">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-textSecondary">Choose monthly or yearly billing for Student Premium.</p>
+            <div className="inline-flex rounded-lg bg-surface2 p-1 text-xs font-medium" role="group" aria-label="Student Premium billing period">
+              <button
+                type="button"
+                aria-pressed={premiumBilling === 'monthly'}
+                onClick={() => setPremiumBilling('monthly')}
+                className={`rounded-md px-3.5 py-1.5 transition ${premiumBilling === 'monthly' ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text'}`}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                aria-pressed={premiumBilling === 'yearly'}
+                onClick={() => setPremiumBilling('yearly')}
+                className={`rounded-md px-3.5 py-1.5 transition ${premiumBilling === 'yearly' ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text'}`}
+              >
+                Yearly
+              </button>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-6 lg:grid-cols-2">
             <PlanCard name={PLAN_COPY.free.name} tag={PLAN_COPY.free.tag} price="$0" per="forever" blurb={PLAN_COPY.free.blurb} features={PLAN_COPY.free.features}>
               <Link to="/login?mode=signup" className="block rounded-lg border border-borderStrong py-2.5 text-center text-sm font-semibold text-text hover:bg-surface2">Start free</Link>
             </PlanCard>
-            <PlanCard name={PLAN_COPY.premium.name} tag={PLAN_COPY.premium.tag} price={`$${PLAN_DEFS.premium_monthly.price}`} per="/ month" blurb={PLAN_COPY.premium.blurb} features={PLAN_COPY.premium.features} highlight badge="Popular">
+            <PlanCard name={PLAN_COPY.premium.name} tag={PLAN_COPY.premium.tag} price={`$${premiumPlan.price}`} per={premiumBilling === 'yearly' ? '/ year' : '/ month'} blurb={PLAN_COPY.premium.blurb} features={PLAN_COPY.premium.features} highlight badge="Popular">
+              <p className="mb-3 text-xs text-textSecondary">
+                {premiumBilling === 'yearly' ? 'Billed once per year.' : 'Billed monthly.'}
+              </p>
               <Link to="/login?mode=signup" className="block rounded-lg bg-primary py-2.5 text-center text-sm font-semibold text-white hover:bg-primaryHover">Get Premium</Link>
             </PlanCard>
           </div>
