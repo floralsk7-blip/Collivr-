@@ -331,3 +331,375 @@ export function formTeams(
   const overall = formed.reduce((sum, t) => sum + t.score, 0) / formed.length
   return { teams: formed, overallScore: Math.round(overall * 10) / 10 }
 }
+
+export type AlternativeTeam = {
+  id: string // 'team_a' | 'team_b' | 'team_c'
+  label: string // 'Team A' | 'Team B' | 'Team C'
+  badge: string // dynamically assigned distinction tag
+  score: number // 0-100, one decimal
+  breakdown: Breakdown
+  missingSkills: string[]
+  redundantSkills: string[]
+  memberIds: string[]
+  roles: Record<string, string>
+  reasoning: string
+  coachingNotes: string
+}
+
+function teamKey(memberIds: string[]): string {
+  return [...memberIds].sort().join('|')
+}
+
+export function findRedundantSkills(members: Prepared[]): string[] {
+  const counts = new Map<string, number>()
+  for (const m of members) {
+    for (const [_, item] of m.skills.entries()) {
+      if (item.level >= 0.6) {
+        counts.set(item.label, (counts.get(item.label) ?? 0) + 1)
+      }
+    }
+  }
+  return [...counts.entries()]
+    .filter(([_, count]) => count >= 2)
+    .map(([label]) => label)
+    .slice(0, 10)
+}
+
+/**
+ * Generates up to three genuinely different alternative team combinations for a student project.
+ * Uses real student profile information, deterministic scoring, and ensures team diversity.
+ */
+export function generateAlternativeTeams(
+  students: Student[],
+  spec: EventSpec,
+  options: { maxAlternatives?: number } = {},
+): AlternativeTeam[] {
+  const maxAlternatives = options.maxAlternatives ?? 3
+  const targetSize = Math.max(1, Math.floor(spec.teamSize) || 4)
+
+  if (!students || students.length < targetSize) {
+    return []
+  }
+
+  const prepared = students.map((s) => prepareStudent(s, spec))
+  // The caller has already supplied the eligible matched-student pool. Do not
+  // silently discard candidates just because their profile has no parsed skill
+  // strings: missing skill evidence should lower their score, not hide them.
+  const pool = prepared
+  if (pool.length < targetSize) return []
+
+  const k = targetSize
+
+  // For modest pools, enumerate every possible combination before ranking.
+  // This guarantees that a pool of 3 candidates with team size 2 evaluates
+  // all 3 pairs instead of relying on three heuristics that may converge on
+  // the same pair. Keep the search bounded for larger pools.
+  if (pool.length <= 20) {
+    const combinations: Prepared[][] = []
+    const chosen: Prepared[] = []
+    const visit = (start: number) => {
+      if (chosen.length === k) {
+        combinations.push(chosen.slice())
+        return
+      }
+      const remaining = k - chosen.length
+      for (let i = start; i <= pool.length - remaining; i++) {
+        chosen.push(pool[i])
+        visit(i + 1)
+        chosen.pop()
+      }
+    }
+    visit(0)
+
+    const ranked = combinations
+      .map((members) => ({ strategy: 'combined', members, score: scoreTeam(members, spec).total }))
+      .sort((a, b) => b.score - a.score || teamKey(a.members.map((m) => m.student.id)).localeCompare(teamKey(b.members.map((m) => m.student.id))))
+      .slice(0, maxAlternatives)
+      .map(({ strategy, members }) => ({ strategy, members }))
+
+    return assembleAlternativeResults(ranked, spec)
+  }
+  const seenCombos = new Set<string>()
+  const rawAlternatives: {
+    strategy: string
+    members: Prepared[]
+  }[] = []
+
+  // 1. Strategy A: Maximum Skill Coverage & Proficiency Focus
+  // Sort pool by strength on required skills focus
+  const skillRanked = [...pool].sort((a, b) => b.strength - a.strength)
+  let teamA = skillRanked.slice(0, k)
+  let restA = skillRanked.slice(k)
+  let bestA = scoreTeam(teamA, spec).total
+
+  for (let pass = 0; pass < 20; pass++) {
+    let improved = false
+    for (let i = 0; i < teamA.length; i++) {
+      for (let j = 0; j < restA.length; j++) {
+        const trial = teamA.slice()
+        trial[i] = restA[j]
+        const sc = scoreTeam(trial, spec).total
+        if (sc > bestA + 1e-9) {
+          const swap = teamA[i]
+          teamA = trial
+          restA[j] = swap
+          bestA = sc
+          improved = true
+        }
+      }
+    }
+    if (!improved) break
+  }
+
+  const keyA = teamKey(teamA.map((m) => m.student.id))
+  seenCombos.add(keyA)
+  rawAlternatives.push({ strategy: 'skill', members: teamA })
+
+  // If pool has exactly k members, only 1 combination can exist
+  if (pool.length === k || maxAlternatives < 2) {
+    return assembleAlternativeResults(rawAlternatives, spec)
+  }
+
+  // 2. Strategy B: Availability & Time Commitment Alignment Focus
+  // Score candidates with higher priority on available weekly hours and consistent schedule
+  const availRanked = [...pool].sort((a, b) => {
+    const aHours = a.hours ?? 4
+    const bHours = b.hours ?? 4
+    if (bHours !== aHours) return bHours - aHours
+    return b.strength - a.strength
+  })
+
+  // Start with top available candidates
+  let teamB = availRanked.slice(0, k)
+  let restB = availRanked.slice(k)
+
+  const availObjective = (candTeam: Prepared[]) => {
+    const sc = scoreTeam(candTeam, spec)
+    // Custom balance: skill 30%, availability 45%, interest 10%, experience 15%
+    return 0.3 * sc.breakdown.skill + 0.45 * sc.breakdown.availability + 0.1 * sc.breakdown.interest + 0.15 * sc.breakdown.experience
+  }
+
+  let bestB = availObjective(teamB)
+  for (let pass = 0; pass < 20; pass++) {
+    let improved = false
+    for (let i = 0; i < teamB.length; i++) {
+      for (let j = 0; j < restB.length; j++) {
+        const trial = teamB.slice()
+        trial[i] = restB[j]
+        const sc = availObjective(trial)
+        if (sc > bestB + 1e-9) {
+          const swap = teamB[i]
+          teamB = trial
+          restB[j] = swap
+          bestB = sc
+          improved = true
+        }
+      }
+    }
+    if (!improved) break
+  }
+
+  // Guarantee teamB differs from teamA
+  let keyB = teamKey(teamB.map((m) => m.student.id))
+  if (seenCombos.has(keyB) && pool.length > k) {
+    // Force a swap with the next candidate in pool not in teamB
+    const inTeam = new Set(teamB.map((m) => m.student.id))
+    const eligibleOthers = pool.filter((p) => !inTeam.has(p.student.id))
+    if (eligibleOthers.length > 0) {
+      // Find the swap that minimizes score drop while making it distinct
+      let bestDistinctTrial: Prepared[] | null = null
+      let bestDistinctScore = -1
+      for (let i = 0; i < teamB.length; i++) {
+        for (const replacement of eligibleOthers) {
+          const trial = teamB.slice()
+          trial[i] = replacement
+          const tKey = teamKey(trial.map((m) => m.student.id))
+          if (!seenCombos.has(tKey)) {
+            const sc = scoreTeam(trial, spec).total
+            if (sc > bestDistinctScore) {
+              bestDistinctScore = sc
+              bestDistinctTrial = trial
+            }
+          }
+        }
+      }
+      if (bestDistinctTrial) {
+        teamB = bestDistinctTrial
+        keyB = teamKey(teamB.map((m) => m.student.id))
+      }
+    }
+  }
+
+  if (!seenCombos.has(keyB)) {
+    seenCombos.add(keyB)
+    rawAlternatives.push({ strategy: 'availability', members: teamB })
+  }
+
+  // If pool has only k+1 members and we want up to 3 combinations:
+  if (maxAlternatives >= 3 && pool.length > k) {
+    // 3. Strategy C: Domain Interest & Experience Balanced Focus
+    const domainKey = skillKey(spec.domain ?? '')
+    const expRanked = [...pool].sort((a, b) => {
+      const aInterest = domainKey && a.interests.has(domainKey) ? 1 : 0
+      const bInterest = domainKey && b.interests.has(domainKey) ? 1 : 0
+      if (bInterest !== aInterest) return bInterest - aInterest
+      return b.strength - a.strength
+    })
+
+    let teamC = expRanked.slice(0, k)
+    let restC = expRanked.slice(k)
+
+    const expObjective = (candTeam: Prepared[]) => {
+      const sc = scoreTeam(candTeam, spec)
+      // Custom balance: interest 35%, experience 30%, skill 25%, diversity 10%
+      return 0.35 * sc.breakdown.interest + 0.3 * sc.breakdown.experience + 0.25 * sc.breakdown.skill + 0.1 * sc.breakdown.diversity
+    }
+
+    let bestC = expObjective(teamC)
+    for (let pass = 0; pass < 20; pass++) {
+      let improved = false
+      for (let i = 0; i < teamC.length; i++) {
+        for (let j = 0; j < restC.length; j++) {
+          const trial = teamC.slice()
+          trial[i] = restC[j]
+          const sc = expObjective(trial)
+          if (sc > bestC + 1e-9) {
+            const swap = teamC[i]
+            teamC = trial
+            restC[j] = swap
+            bestC = sc
+            improved = true
+          }
+        }
+      }
+      if (!improved) break
+    }
+
+    let keyC = teamKey(teamC.map((m) => m.student.id))
+    if (seenCombos.has(keyC)) {
+      // Find a combination distinct from both seen combinations
+      const inTeamC = new Set(teamC.map((m) => m.student.id))
+      const eligibleOthers = pool.filter((p) => !inTeamC.has(p.student.id))
+      let bestDistinctTrial: Prepared[] | null = null
+      let bestDistinctScore = -1
+      for (let i = 0; i < teamC.length; i++) {
+        for (const replacement of eligibleOthers) {
+          const trial = teamC.slice()
+          trial[i] = replacement
+          const tKey = teamKey(trial.map((m) => m.student.id))
+          if (!seenCombos.has(tKey)) {
+            const sc = scoreTeam(trial, spec).total
+            if (sc > bestDistinctScore) {
+              bestDistinctScore = sc
+              bestDistinctTrial = trial
+            }
+          }
+        }
+      }
+      if (bestDistinctTrial) {
+        teamC = bestDistinctTrial
+        keyC = teamKey(teamC.map((m) => m.student.id))
+      }
+    }
+
+    if (!seenCombos.has(keyC)) {
+      seenCombos.add(keyC)
+      rawAlternatives.push({ strategy: 'experience', members: teamC })
+    }
+  }
+
+  return assembleAlternativeResults(rawAlternatives, spec)
+}
+
+function assembleAlternativeResults(
+  rawList: { strategy: string; members: Prepared[] }[],
+  spec: EventSpec,
+): AlternativeTeam[] {
+  const letters = ['A', 'B', 'C']
+  const evaluated = rawList.map((item, idx) => {
+    const scored = scoreTeam(item.members, spec)
+    const redundant = findRedundantSkills(item.members)
+    const roles = assignRoles(item.members, spec)
+    return {
+      index: idx,
+      strategy: item.strategy,
+      members: item.members,
+      score: Math.round(scored.total * 10) / 10,
+      breakdown: scored.breakdown,
+      missingSkills: scored.missingSkills,
+      redundantSkills: redundant,
+      roles,
+    }
+  })
+
+  // Determine dynamic badges based on relative standout properties
+  // Find highest in each dimension across the alternatives
+  const maxSkill = Math.max(...evaluated.map((e) => e.breakdown.skill))
+  const maxAvail = Math.max(...evaluated.map((e) => e.breakdown.availability))
+  const maxExp = Math.max(...evaluated.map((e) => e.breakdown.experience))
+  const maxInterest = Math.max(...evaluated.map((e) => e.breakdown.interest))
+
+  return evaluated.map((team, idx) => {
+    const letter = letters[idx] || `${idx + 1}`
+    let badge = 'Balanced All-Rounder'
+
+    if (team.missingSkills.length === 0 && team.breakdown.skill === maxSkill && team.breakdown.skill >= 75) {
+      badge = 'Strongest Skill Coverage'
+    } else if (team.breakdown.availability === maxAvail && team.breakdown.availability >= 70) {
+      badge = 'Optimal Availability Alignment'
+    } else if (team.breakdown.interest === maxInterest && team.breakdown.interest >= 75) {
+      badge = 'High Project Interest Alignment'
+    } else if (team.breakdown.experience === maxExp && team.breakdown.experience >= 75) {
+      badge = 'Deep Experience & Seniority'
+    } else if (team.breakdown.skill === maxSkill) {
+      badge = 'Top Skill Coverage'
+    }
+
+    const memberNames = team.members.map((m) => m.student.name || 'Student')
+    const requiredCount = spec.skillsFocus.length
+    const coveredCount = requiredCount - team.missingSkills.length
+
+    let reasoning = `Team ${letter} achieves an overall compatibility score of ${team.score}%. `
+    if (requiredCount > 0) {
+      reasoning += `Covers ${coveredCount} of ${requiredCount} required skills. `
+      if (team.missingSkills.length > 0) {
+        reasoning += `Missing required: ${team.missingSkills.join(', ')}. `
+      } else {
+        reasoning += `Full coverage across all required skills. `
+      }
+    }
+    if (team.redundantSkills.length > 0) {
+      reasoning += `Reinforced depth in ${team.redundantSkills.slice(0, 3).join(', ')}. `
+    }
+    reasoning += `Primary strength: ${badge}.`
+
+    const coachingParts: string[] = []
+    if (team.missingSkills.length > 0) {
+      coachingParts.push(`Plan early training or mentor assistance for ${team.missingSkills.join(', ')}.`)
+    } else {
+      coachingParts.push('Skill coverage is solid; align on component ownership during the first meeting.')
+    }
+    if (team.breakdown.availability < 65) {
+      coachingParts.push('Varying weekly hours; use asynchronous task boards to coordinate effectively.')
+    }
+    if (team.breakdown.experience < 65) {
+      coachingParts.push('Pair junior contributors with experienced members on core architecture.')
+    }
+    const coachingNotes = coachingParts.join(' ')
+
+    return {
+      id: `team_${letter.toLowerCase()}`,
+      label: `Team ${letter}`,
+      badge,
+      score: team.score,
+      breakdown: team.breakdown,
+      missingSkills: team.missingSkills,
+      redundantSkills: team.redundantSkills,
+      memberIds: team.members.map((m) => m.student.id),
+      roles: team.roles,
+      reasoning,
+      coachingNotes,
+    }
+  })
+}
+
